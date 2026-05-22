@@ -46,6 +46,7 @@ import {
     isNotEditBlock
 } from "./getBlock";
 import {transaction, updateTransaction} from "./transaction";
+import {openSuperBlockEditor} from "../superblock/editor";
 import {hideElements} from "../ui/hideElements";
 /// #if !BROWSER
 import {ipcRenderer} from "electron";
@@ -2948,7 +2949,15 @@ export class WYSIWYG {
 
             const editElement = hasClosestByClassName(event.target, "protyle-action__edit");
             if (editElement && !protyle.disabled) {
-                protyle.toolbar.showRender(protyle, editElement.parentElement.parentElement);
+                const sbBlock = editElement.parentElement.parentElement;
+                if (sbBlock.getAttribute("custom-sb-kind")) {
+                    // Super-block: edit our code, not the stock HTML source.
+                    openSuperBlockEditor(sbBlock as HTMLElement);
+                    event.stopPropagation();
+                    event.preventDefault();
+                    return;
+                }
+                protyle.toolbar.showRender(protyle, sbBlock);
                 event.stopPropagation();
                 event.preventDefault();
                 return;
