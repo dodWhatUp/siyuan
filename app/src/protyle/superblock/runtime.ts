@@ -1,14 +1,17 @@
 // Super-block runtime — compiles and runs a block's user code with a
 // capability-gated context (see notes/06-superblock-implementation-plan.md).
 //
-// Step 4a scope: compute + ui + persist. Gating by omission — only the
-// capabilities a preset enables are attached to `ctx`, so a smaller profile is
-// strictly cheaper and exposes less surface. Later steps add api / network /
-// libs / timers WITHOUT changing this contract.
+// Step 4b scope: compute + ui + persist + api + network. Gating by omission —
+// only the capabilities a preset enables are attached to `ctx`, so a smaller
+// profile is strictly cheaper and exposes less surface. `api`/`network` are also
+// off by default: each is granted only after a first-use confirm dialog (per
+// block, per capability, for the current session). Later steps add libs / timers
+// WITHOUT changing this contract.
 
-import {fetchPost} from "../../util/fetch";
+import {fetchPost, fetchSyncPost} from "../../util/fetch";
+import {confirmDialog} from "../../dialog/confirmDialog";
 
-export type Capability = "compute" | "ui" | "persist";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -21,6 +24,14 @@ export interface SuperBlockCtx {
         get: <T = unknown>(key: string) => T | undefined;
         set: (key: string, value: unknown) => void;
     };
+    // present only when the "api" capability is enabled. Calls the SiYuan kernel,
+    // restricted to a read-only endpoint allowlist. First use prompts a confirm.
+    api?: {
+        post: (path: string, body?: object) => Promise<IWebSocketData>;
+    };
+    // present only when the "network" capability is enabled. Pass-through to the
+    // browser fetch after a first-use confirm. (Domain allowlist comes later.)
+    fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -32,9 +43,51 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     calc: {caps: ["compute", "ui"]},
     hello: {caps: ["compute", "ui"]},
     data: {caps: ["compute", "ui", "persist"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network"]},
 };
 
 const SB_STATE = "custom-sb-state";
+
+// Read-only kernel endpoints a super-block may call via ctx.api.post. Anything
+// that mutates the vault is intentionally excluded — block code should not be
+// able to silently rewrite other blocks.
+const API_ALLOW = [
+    "/api/query/sql",
+    "/api/block/getBlockInfo",
+    "/api/block/getBlockKramdown",
+    "/api/attr/getBlockAttrs",
+];
+
+// Session-scoped capability grants, keyed by blockId. Cleared on reload (so a
+// synced/imported block re-prompts). Persisting grants to an IAL is a later step.
+const grants = new Map<string, Set<Capability>>();
+
+// First-use confirm. Resolves true once the user allows `cap` for `blockId`
+// (remembered for the session); false if they cancel.
+const ensureGrant = (blockId: string, cap: Capability): Promise<boolean> => {
+    const have = grants.get(blockId);
+    if (have && have.has(cap)) {
+        return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+        confirmDialog(
+            `Super-block — allow "${cap}"?`,
+            `Block …${blockId.slice(-6)} is requesting the <b>${cap}</b> capability ` +
+            `(${cap === "api" ? "read from the SiYuan kernel" : "make network requests"}). ` +
+            `Allow for this session?`,
+            () => {
+                let set = grants.get(blockId);
+                if (!set) {
+                    set = new Set();
+                    grants.set(blockId, set);
+                }
+                set.add(cap);
+                resolve(true);
+            },
+            () => resolve(false),
+        );
+    });
+};
 
 const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): SuperBlockCtx => {
     const ctx: SuperBlockCtx = {blockId};
@@ -63,6 +116,27 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                     fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[SB_STATE]: json}});
                 }
             },
+        };
+    }
+    if (caps.includes("api")) {
+        ctx.api = {
+            post: async (path: string, body?: object): Promise<IWebSocketData> => {
+                if (!API_ALLOW.includes(path)) {
+                    throw new Error(`api: endpoint not allowed (${path})`);
+                }
+                if (!(await ensureGrant(blockId, "api"))) {
+                    throw new Error("api: denied by user");
+                }
+                return fetchSyncPost(path, body || {});
+            },
+        };
+    }
+    if (caps.includes("network")) {
+        ctx.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            if (!(await ensureGrant(blockId, "network"))) {
+                throw new Error("network: denied by user");
+            }
+            return fetch(input, init);
         };
     }
     return ctx;
