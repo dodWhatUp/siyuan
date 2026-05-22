@@ -6,10 +6,13 @@
 // shadow-DOM sandbox. Plain HTML blocks (no marker) are never matched here, so the
 // existing HTML-block behaviour is untouched.
 //
-// Step 1 scope: prove the marker path end-to-end — detect marked blocks and mount a
-// visible placeholder natively. No capabilities/code execution yet (later steps).
+// Step 2 scope: detect marked blocks, mount a host, and RUN the block's code
+// (from custom-sb-code) through the capability-gated runtime. No editor yet.
+
+import {runSuperBlock} from "../superblock/runtime";
 
 export const SB_MARKER = "custom-sb-kind";
+export const SB_CODE = "custom-sb-code";
 
 export const superblockRender = (element: Element) => {
     let blocks: Element[] | NodeListOf<Element>;
@@ -46,7 +49,9 @@ export const superblockRender = (element: Element) => {
             host.setAttribute("contenteditable", "false");
             wrapper.insertBefore(host, wrapper.firstChild);
         }
-        // Step 1 placeholder — confirms the marker path renders natively.
-        host.textContent = `super-block (${kind}) — render path OK`;
+        // Run the block's code through the capability-gated runtime.
+        const code = block.getAttribute(SB_CODE) || "";
+        const blockId = block.getAttribute("data-node-id") || "";
+        runSuperBlock(host, blockId, kind, code);
     });
 };

@@ -803,7 +803,7 @@ ${genHintItemHTML(item)}
                     if (value === "<div>") {
                         newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else if (value === "<superblock>") {
-                        newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="hello">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+                        newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="calc" custom-sb-code="${Lute.EscapeHTMLStr('const a = 2, b = 2; ctx.el.textContent = a + " + " + b + " = " + (a + b);')}">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else {
                         editableElement.textContent = textContent;
                         newHTML = protyle.lute.SpinBlockDOM(nodeElement.outerHTML);
@@ -823,7 +823,7 @@ ${genHintItemHTML(item)}
                     if (value === "<div>") {
                         newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else if (value === "<superblock>") {
-                        newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="hello">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+                        newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="calc" custom-sb-code="${Lute.EscapeHTMLStr('const a = 2, b = 2; ctx.el.textContent = a + " + " + b + " = " + (a + b);')}">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     }
                     const oldHTML = nodeElement.outerHTML;
                     let foldData;
