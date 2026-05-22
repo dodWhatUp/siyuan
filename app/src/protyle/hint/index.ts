@@ -802,6 +802,8 @@ ${genHintItemHTML(item)}
                     let newHTML = "";
                     if (value === "<div>") {
                         newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+                    } else if (value === "<superblock>") {
+                        newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="hello">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else {
                         editableElement.textContent = textContent;
                         newHTML = protyle.lute.SpinBlockDOM(nodeElement.outerHTML);
@@ -820,6 +822,8 @@ ${genHintItemHTML(item)}
                     let newHTML = protyle.lute.SpinBlockDOM(textContent);
                     if (value === "<div>") {
                         newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+                    } else if (value === "<superblock>") {
+                        newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="hello">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     }
                     const oldHTML = nodeElement.outerHTML;
                     let foldData;
@@ -860,7 +864,11 @@ ${genHintItemHTML(item)}
                     }
                     transaction(protyle, doOperations, undoOperations);
                 }
-                if (value === "<div>" || value === "$$" || (value.indexOf("```") > -1 && (value.length > 3 || nodeElement.classList.contains("render-node")))) {
+                if (value === "<superblock>") {
+                    // Super-block: render via our path (processRender → superblockRender);
+                    // do NOT open the stock HTML source editor.
+                    processRender(nodeElement);
+                } else if (value === "<div>" || value === "$$" || (value.indexOf("```") > -1 && (value.length > 3 || nodeElement.classList.contains("render-node")))) {
                     protyle.toolbar.showRender(protyle, nodeElement);
                     processRender(nodeElement);
                 } else if (value.startsWith("```")) {

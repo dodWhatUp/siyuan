@@ -7,6 +7,7 @@ import {mindmapRender} from "../render/mindmapRender";
 import {flowchartRender} from "../render/flowchartRender";
 import {plantumlRender} from "../render/plantumlRender";
 import {htmlRender} from "../render/htmlRender";
+import {superblockRender} from "../render/superblockRender";
 import {Constants} from "../../constants";
 import {escapeHtml} from "../../util/escape";
 
@@ -57,6 +58,10 @@ const RENDER_MAP: Record<string, (previewPanel: Element) => void> = {
 };
 
 export const processRender = (previewPanel: Element) => {
+    // Super-block: mount the dedicated runtime for marked NodeHTMLBlock elements.
+    // Additive — only matches blocks with the custom-sb-kind marker; stock HTML
+    // blocks fall through to htmlRender below unchanged.
+    superblockRender(previewPanel);
     const language = previewPanel.getAttribute("data-subtype");
     if (RENDER_MAP[language]) {
         RENDER_MAP[language](previewPanel);
