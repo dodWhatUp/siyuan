@@ -277,16 +277,19 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
         }
     };
 
-    // The "type" picker lists presets (raw-code) AND features (config-driven).
-    const kinds = listPresets();
-    listFeatures().forEach((f) => {
-        if (!kinds.includes(f.id)) {
-            kinds.push(f.id);
-        }
-    });
-    const options = kinds
-        .map((k) => `<option value="${k}"${k === kind ? " selected" : ""}>${k}</option>`)
+    // The "type" picker lists FEATURES (no-code config) and PRESETS (raw code) in two
+    // labelled groups. Both lists are dynamic: any feature a plugin registers via
+    // window.siyuan.superblock.registerFeature appears here automatically — that is how
+    // a newly-added ability becomes a selectable option in this window.
+    const escOpt = (s: string) => s.replace(/[&<>"]/g, (c) => (({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"})[c] as string));
+    const featureOpts = listFeatures()
+        .map((f) => `<option value="${f.id}"${f.id === kind ? " selected" : ""}>${escOpt(f.label)} — config</option>`)
         .join("");
+    const presetOpts = listPresets()
+        .map((k) => `<option value="${k}"${k === kind ? " selected" : ""}>${k} — code</option>`)
+        .join("");
+    const options = (featureOpts ? `<optgroup label="Features (no-code)">${featureOpts}</optgroup>` : "")
+        + `<optgroup label="Presets (code)">${presetOpts}</optgroup>`;
 
     const dialog = new Dialog({
         title: "Super Block — edit",

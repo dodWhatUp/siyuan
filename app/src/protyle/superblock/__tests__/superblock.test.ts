@@ -6,7 +6,7 @@
 // reminder scheduler dedupe, and DOM integration (calendar chip → reminder write,
 // database table location cell → write, board view group + drag-write).
 
-import {__features} from "./runtime";
+import {__features, registerFeature, registerProperty, getProperty} from "./runtime";
 import {registerBuiltinFeatures} from "./builtinFeatures";
 import {
     registerBuiltinProperties, offsetToMinutes,
@@ -174,6 +174,23 @@ export async function run(): Promise<void> {
             /\(\d+\)\s*$/.test(d.textContent || "") && (d as HTMLElement).style.fontWeight === "bold");
         ok("board.columns", headers.length === 2);
     }
+
+    // ---- plugin extensibility (SPI stays open) --------------------------
+    // A plugin registers a custom feature + property via the same registry the SPI
+    // exposes; both must be listed and usable regardless of the freeze.
+    registerFeature({id: "plugFeat", label: "Plug Feature", caps: ["ui"], configSchema: [{key: "x", label: "X", type: "text"}], run: () => { /* noop */ }});
+    registerProperty({id: "plugProp", label: "Plug Prop", baseType: "text"});
+    ok("ext.feature.registered", __features.get("plugFeat")?.label === "Plug Feature");
+    ok("ext.property.registered", getProperty("plugProp")?.baseType === "text");
+
+    // ---- freeze gating: built-ins hidden, query kept -------------------
+    __features.clear();
+    setFrozen(true);
+    registerBuiltinFeatures();
+    ok("freeze.hides.calendar", !__features.get("calendar"));
+    ok("freeze.hides.database", !__features.get("database"));
+    ok("freeze.keeps.query", !!__features.get("query"));
+    setFrozen(false);   // restore for any later use
 
     // ---- summary ---------------------------------------------------------
     const total = pass + fails.length;
