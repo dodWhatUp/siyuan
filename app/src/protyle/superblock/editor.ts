@@ -311,7 +311,7 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
         <option value="">— insert example template —</option>
         ${TEMPLATES.map((t, i) => `<option value="${i}">${t.name.replace(/"/g, "&quot;")}</option>`).join("")}
     </select>
-    <div id="sbCodeHint" class="ft__smaller ft__on-surface" style="margin-bottom: 8px">Code runs with <code class="fn__code">ctx</code> in scope (<code class="fn__code">ctx.el</code> = the block element).</div>
+    <div id="sbCodeHint" class="ft__smaller ft__on-surface" style="margin-bottom: 8px">Code runs with <code class="fn__code">ctx</code> in scope. <b>Tip:</b> write to <code class="fn__code">ctx.el</code> (e.g. <code class="fn__code">ctx.el.textContent = "hi"</code>) to show content in the block.</div>
     <textarea spellcheck="false"></textarea>
 </div>
 <div class="b3-dialog__action">

@@ -27,7 +27,7 @@ import {matchHotkey} from "./hotkey";
 import {storagePath} from "./storage";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -109,6 +109,11 @@ export interface SuperBlockCtx {
         set: (key: string, value: unknown) => Promise<void>;
         remove: (key: string) => Promise<void>;
     };
+    // present with the "clipboard" capability. Read/write the system clipboard.
+    clipboard?: {
+        writeText: (text: string) => Promise<void>;
+        readText: () => Promise<string>;
+    };
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -166,7 +171,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -632,6 +637,12 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             },
             read: (path: string) => fetch(path).then((r) => r.text()),
             url: (path: string) => path,
+        };
+    }],
+    ["clipboard", ({ctx}) => {
+        ctx.clipboard = {
+            writeText: (text: string) => navigator.clipboard.writeText(text),
+            readText: () => navigator.clipboard.readText(),
         };
     }],
     ["storage", ({ctx}) => {
