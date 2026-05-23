@@ -58,6 +58,24 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
 // destroyed before the host is cleared on re-render (avoids leaked WS listeners).
 const nestedEditors = new WeakMap<HTMLElement, Array<{destroy: () => void}>>();
 
+// Destroy any nested editors mounted into `host` (releases their WebSocket /
+// listeners instead of orphaning them in memory). Called on re-render and, via
+// the removal observer in superblockRender, when a super-block is deleted (P9).
+export const disposeSuperBlock = (host: HTMLElement) => {
+    const nested = nestedEditors.get(host);
+    if (!nested) {
+        return;
+    }
+    nested.forEach((p) => {
+        try {
+            p.destroy();
+        } catch (e) {
+            // ignore teardown errors
+        }
+    });
+    nestedEditors.delete(host);
+};
+
 const SB_STATE = "custom-sb-state";
 
 // Compile-once cache (step 6a): a block's code is turned into a Function once and
@@ -211,19 +229,8 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 // Errors are contained — a throwing block shows an inline message, never breaks the doc.
 export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string) => {
     const preset = PRESETS[kind] || PRESETS.calc;
-    // Destroy any nested editors from a previous mount before clearing the host,
-    // so their WebSocket/listeners are released (not just orphaned in the DOM).
-    const prevNested = nestedEditors.get(host);
-    if (prevNested) {
-        prevNested.forEach((p) => {
-            try {
-                p.destroy();
-            } catch (e) {
-                // ignore teardown errors
-            }
-        });
-        nestedEditors.delete(host);
-    }
+    // Destroy any nested editors from a previous mount before clearing the host.
+    disposeSuperBlock(host);
     host.innerHTML = "";
     // Global kill-switch (policy.ts): no super-block code runs at all.
     if (isKilled()) {
