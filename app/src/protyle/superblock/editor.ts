@@ -11,13 +11,13 @@
 import {Dialog} from "../../dialog";
 import {fetchPost} from "../../util/fetch";
 import {superblockRender} from "../render/superblockRender";
-import {PRESETS} from "./runtime";
+import {getPreset, listPresets} from "./runtime";
 import {addScript} from "../util/addScript";
 import {setCodeTheme} from "../render/util";
 import {Constants} from "../../constants";
 
 const capsHint = (kind: string): string => {
-    const preset = PRESETS[kind];
+    const preset = getPreset(kind);
     return preset ? `capabilities: ${preset.caps.join(", ")}` : "unknown preset";
 };
 
@@ -120,7 +120,7 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
     const kind = nodeElement.getAttribute("custom-sb-kind") || "calc";
     const code = nodeElement.getAttribute("custom-sb-code") || "";
 
-    const options = Object.keys(PRESETS)
+    const options = listPresets()
         .map((k) => `<option value="${k}"${k === kind ? " selected" : ""}>${k}</option>`)
         .join("");
 

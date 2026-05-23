@@ -73,6 +73,21 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write"]},
 };
 
+// Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
+// so a plugin can add a block type that shows up in the editor's preset picker.
+const customPresets = new Map<string, SuperBlockPreset>();
+export const registerPreset = (id: string, preset: SuperBlockPreset) => customPresets.set(id, preset);
+export const getPreset = (kind: string): SuperBlockPreset | undefined => customPresets.get(kind) || PRESETS[kind];
+export const listPresets = (): string[] => {
+    const ids = Object.keys(PRESETS);
+    customPresets.forEach((_v, k) => {
+        if (!ids.includes(k)) {
+            ids.push(k);
+        }
+    });
+    return ids;
+};
+
 // Allowlisted libraries for ctx.require — pinned CDN builds and the global each
 // one exposes. The allowlist IS the control: a block can only load these.
 const LIB_ALLOW: Record<string, {url: string; global: string}> = {
@@ -382,7 +397,7 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 // Runs one super-block: builds the gated ctx, compiles the code once, executes it.
 // Errors are contained — a throwing block shows an inline message, never breaks the doc.
 export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string) => {
-    const preset = PRESETS[kind] || PRESETS.calc;
+    const preset = getPreset(kind) || PRESETS.calc;
     // Idempotent re-render (Seq 4): if nothing that affects output changed
     // (kind, code, policy) and the host is already mounted, skip the whole
     // teardown+rerun. This avoids rebuilding an expensive nested editor (embed)
