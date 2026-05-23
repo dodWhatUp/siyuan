@@ -6,6 +6,7 @@ import {registerFeature, SuperBlockCtx, getProperty} from "./runtime";
 import {applyView, ViewRecord, ViewConfig} from "./viewEngine";
 import {ReminderScheduler} from "./reminderScheduler";
 import {icsFromRows} from "./icsExport";
+import {isFrozen} from "./featureFlags";
 
 // Trigger a client-side text download (browser only; no-ops if unavailable).
 const downloadText = (filename: string, text: string, mime = "text/calendar") => {
@@ -628,35 +629,46 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
 };
 
 export const registerBuiltinFeatures = () => {
-    registerFeature({
-        id: "calendar",
-        label: "Calendar",
-        caps: ["ui", "av", "watch", "timers"],
-        configSchema: [
-            {key: "db", label: "Database", type: "av-database"},
-            {key: "dateCol", label: "Date column", type: "av-column", ofKey: "db"},
-            {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
-            {key: "view", label: "Default sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
-            {key: "days", label: "Days (for N-days view)", type: "number"},
-        ],
-        run: calendarRun,
-    });
-    registerFeature({
-        id: "database",
-        label: "Database (multi-view)",
-        caps: ["ui", "av", "watch", "timers"],
-        configSchema: [
-            {key: "db", label: "Database", type: "av-database"},
-            {key: "dateCol", label: "Date column (for calendar view)", type: "av-column", ofKey: "db"},
-            {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
-            {key: "locationCol", label: "Location column (text)", type: "av-column", ofKey: "db"},
-            {key: "groupCol", label: "Group column (for board view)", type: "av-column", ofKey: "db"},
-            {key: "view", label: "Default view", type: "select", options: [{value: "table", label: "Table"}, {value: "calendar", label: "Calendar"}, {value: "board", label: "Board"}]},
-            {key: "calView", label: "Calendar sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
-            {key: "days", label: "Days (for N-days view)", type: "number"},
-        ],
-        run: dbRun,
-    });
+    // ---------------------------------------------------------------------
+    // FROZEN (see featureFlags.ts): the calendar + database multi-view are the
+    // task/calendar track, paused on user request. While isFrozen() is true they
+    // are NOT registered, so they never appear in the picker and their run()
+    // (which also starts the ReminderScheduler) never executes. The functions
+    // calendarRun / dbRun / renderCalendar / renderBoard / startReminderScheduler
+    // above remain compiled but unreachable. Flip featureFlags to revive.
+    // ---------------------------------------------------------------------
+    if (!isFrozen()) {
+        registerFeature({
+            id: "calendar",
+            label: "Calendar",
+            caps: ["ui", "av", "watch", "timers"],
+            configSchema: [
+                {key: "db", label: "Database", type: "av-database"},
+                {key: "dateCol", label: "Date column", type: "av-column", ofKey: "db"},
+                {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
+                {key: "view", label: "Default sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
+                {key: "days", label: "Days (for N-days view)", type: "number"},
+            ],
+            run: calendarRun,
+        });
+        registerFeature({
+            id: "database",
+            label: "Database (multi-view)",
+            caps: ["ui", "av", "watch", "timers"],
+            configSchema: [
+                {key: "db", label: "Database", type: "av-database"},
+                {key: "dateCol", label: "Date column (for calendar view)", type: "av-column", ofKey: "db"},
+                {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
+                {key: "locationCol", label: "Location column (text)", type: "av-column", ofKey: "db"},
+                {key: "groupCol", label: "Group column (for board view)", type: "av-column", ofKey: "db"},
+                {key: "view", label: "Default view", type: "select", options: [{value: "table", label: "Table"}, {value: "calendar", label: "Calendar"}, {value: "board", label: "Board"}]},
+                {key: "calView", label: "Calendar sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
+                {key: "days", label: "Days (for N-days view)", type: "number"},
+            ],
+            run: dbRun,
+        });
+    }
+    // ACTIVE FOCUS: search/query (below) + embed (see registerEmbedFeature).
     registerFeature({
         id: "query",
         label: "Query / Search",

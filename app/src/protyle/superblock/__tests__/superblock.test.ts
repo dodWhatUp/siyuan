@@ -14,6 +14,7 @@ import {
 } from "./builtinProperties";
 import {parseRRule, expandOccurrences, upcomingFires, collectDueFires} from "./reminderEngine";
 import {parseNlDate, parseQuickAdd, extractTags} from "./nlDate";
+import {setFrozen, isFrozen} from "./featureFlags";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -31,6 +32,11 @@ const iso = (s: number) => new Date(s).toISOString().slice(0, 16);
 const tick = () => new Promise((r) => setTimeout(r, 30));
 
 export async function run(): Promise<void> {
+    // The task track is FROZEN in the shipping app (featureFlags.DEFAULT_FROZEN).
+    // Tests unfreeze so the frozen code stays fully exercised — this is what keeps
+    // re-enabling safe. (A separate assertion below verifies freezing hides them.)
+    ok("freeze.default-on", isFrozen() === true);   // app ships with the task track frozen
+    setFrozen(false);
     registerBuiltinProperties();
     registerBuiltinFeatures();
 

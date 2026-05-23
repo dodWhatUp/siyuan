@@ -5,6 +5,7 @@
 // Ported reminder-offset logic from siyuan-plugin-tasks (src/reminder/scheduler.ts).
 
 import {registerProperty} from "./runtime";
+import {isFrozen} from "./featureFlags";
 
 export const REMINDER_SCHEMA = "siyuan-superblock/reminder@1";
 
@@ -262,6 +263,14 @@ const editLocation = (_cell: unknown, metaIn: unknown): HTMLElement => {
 };
 
 export const registerBuiltinProperties = () => {
+    // FROZEN (see featureFlags.ts): reminder + location are part of the paused
+    // task track. While isFrozen() is true neither registers, so getProperty()
+    // returns undefined for them and the calendar's bell / location cell editor
+    // are unreachable. The parse/serialize/render/edit functions above stay
+    // compiled. Flip featureFlags to revive.
+    if (isFrozen()) {
+        return;
+    }
     registerProperty({
         id: "reminder",
         label: "Reminder",
