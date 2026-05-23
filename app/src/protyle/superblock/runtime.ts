@@ -22,9 +22,10 @@ import {Dialog} from "../../dialog/index";
 import {Menu} from "../../plugin/Menu";
 import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
+import {parseEvery} from "./cron";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -80,6 +81,10 @@ export interface SuperBlockCtx {
     // allowlisted library from CDN (cached per session) and resolves to its
     // global, e.g. `const Chart = await ctx.require("chartjs")`.
     require?: (name: string) => Promise<unknown>;
+    // present with the "cron" capability. Schedules a background repeat on a human
+    // interval ("30s", "5m", "1h", "1h30m", "2d", or ms). Runs regardless of the
+    // block's scroll position; auto-cleared on unmount/removal. Returns a cancel fn.
+    cron?: (every: string | number, fn: () => void) => () => void;
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -137,7 +142,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -571,6 +576,18 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             showMessage,   // toast notification
             Dialog,        // modal dialog (class)
             Menu,          // right-click / context menu (class)
+        };
+    }],
+    ["cron", ({ctx, host}) => {
+        const d = getDisposables(host);
+        ctx.cron = (every: string | number, fn: () => void): (() => void) => {
+            const ms = parseEvery(every);
+            if (!ms) { return () => { /* invalid spec → no-op */ }; }
+            const id = window.setInterval(() => {
+                try { fn(); } catch (e) { console.warn("[superblock] cron error", e); }
+            }, ms);
+            d.timers.push(id);   // reuse the timers disposal list → cleared on unmount/removal
+            return () => clearInterval(id);
         };
     }],
     ["timers", ({ctx, host}) => {

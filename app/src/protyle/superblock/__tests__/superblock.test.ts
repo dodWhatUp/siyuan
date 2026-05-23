@@ -15,6 +15,7 @@ import {
 import {parseRRule, expandOccurrences, upcomingFires, collectDueFires} from "./reminderEngine";
 import {parseNlDate, parseQuickAdd, extractTags} from "./nlDate";
 import {setFrozen, isFrozen} from "./featureFlags";
+import {parseEvery} from "./cron";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -93,6 +94,10 @@ export async function run(): Promise<void> {
     const qa = parseQuickAdd("Buy milk tomorrow 3pm #errand !high");
     eq("nl.quickadd.fields", [qa.title, qa.tags, qa.priority, qa.hasTime, qa.dateMs !== undefined], ["Buy milk", ["errand"], "high", true, true]);
     ok("nl.quickadd.time3pm", new Date(qa.dateMs!).getHours() === 15);
+
+    // ---- cron interval parsing ------------------------------------------
+    eq("cron.parse", [parseEvery(5000), parseEvery(500), parseEvery("30s"), parseEvery("5m"), parseEvery("1h"), parseEvery("1h30m"), parseEvery("2d"), parseEvery("2000"), parseEvery("nope")],
+        [5000, 1000, 30000, 300000, 3600000, 5400000, 172800000, 2000, null]);
 
     // ---- .ics export -----------------------------------------------------
     eq("ics.trigger", [minutesToTrigger(-15), minutesToTrigger(-1440), minutesToTrigger(-90), minutesToTrigger(0)],
