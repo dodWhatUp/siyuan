@@ -801,7 +801,7 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
 const embedRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const el = ctx.el as HTMLElement;
     const target = String(cfg.target || "").trim();
-    const view = String(cfg.view || "editable");   // editable | readonly
+    const view = String(cfg.view || "iframe");   // iframe | editable | readonly
     if (!target) {
         el.textContent = "Embed — set a target block id in block settings.";
         return;
@@ -822,11 +822,16 @@ const embedRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         ctx.watch?.(render);   // cheap re-fetch; safe to refresh
         return;
     }
-    // Editable: mount the nested editor ONCE. Re-running on ctx.watch (every
-    // websocket message) would destroy + rebuild the editor on each keystroke's
-    // server echo → an endless "refresh" loop and lost cursor. The nested protyle
-    // updates itself, so no watch subscription here.
     el.innerHTML = "";
+    // Default: isolated iframe — the SAME mechanism SiYuan uses to open a block/page
+    // in a new window (window.html?json=…), just hosted inline. Separate browsing
+    // context ⇒ none of the host-input-pipeline problems.
+    if (view === "iframe") {
+        if (ctx.embedFrame) { ctx.embedFrame(target); } else { el.textContent = "embed capability unavailable"; }
+        return;
+    }
+    // "editable" = in-page nested Protyle (lighter, but shares the host's event scope;
+    // kept as an option). Mount ONCE — re-rendering on ctx.watch would loop.
     if (ctx.embed) { ctx.embed(target); } else { el.textContent = "embed capability unavailable"; }
 };
 
@@ -888,10 +893,10 @@ export const registerBuiltinFeatures = () => {
         id: "embed",
         label: "Embed",
         caps: ["ui", "embed", "watch", "api"],
-        defaultConfig: {view: "editable"},
+        defaultConfig: {view: "iframe"},
         configSchema: [
             {key: "target", label: "Target block id", type: "text"},
-            {key: "view", label: "Mode", type: "select", options: [{value: "editable", label: "Editable"}, {value: "readonly", label: "Read-only"}]},
+            {key: "view", label: "Mode", type: "select", options: [{value: "iframe", label: "Isolated window (recommended)"}, {value: "editable", label: "Inline editor"}, {value: "readonly", label: "Read-only"}]},
         ],
         run: embedRun,
     });

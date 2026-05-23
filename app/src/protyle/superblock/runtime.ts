@@ -47,6 +47,10 @@ export interface SuperBlockCtx {
     // Protyle editor for the target block into ctx.el — fully editable, unlike a
     // stock read-only embed. The nested editor is destroyed on re-render.
     embed?: (targetBlockId: string, container?: HTMLElement) => void;
+    // present with the "embed" capability. Embeds the target block in an ISOLATED
+    // iframe (its own browsing context) — structurally immune to the host's input
+    // pipeline (no dual-id / double-Enter / refresh loop). Fully editable.
+    embedFrame?: (targetBlockId: string, container?: HTMLElement) => void;
     // present with the "ui" capability. Opens a block in the current tab (focused)
     // or a new window — used by search results to make rows openable/editable.
     open?: (id: string, newWindow?: boolean) => void;
@@ -482,6 +486,28 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 wrap.addEventListener(type, (e) => e.stopPropagation());
             });
             getDisposables(host).editors.push(nested);
+        };
+        // Isolated iframe embed — a separate browsing context, so the host's input
+        // pipeline can never touch it (no dual-id/double-Enter/refresh). Loads the
+        // SiYuan single-window page focused on the target block.
+        ctx.embedFrame = (targetBlockId: string, container?: HTMLElement) => {
+            const parent = container || host;
+            fetchSyncPost("/api/block/getBlockInfo", {id: targetBlockId}).then((res) => {
+                const d = res.data as {rootTitle?: string; rootIcon?: string; box?: string; rootID?: string} | null;
+                if (!d) { parent.appendChild(document.createTextNode("(block not found)")); return; }
+                const tab = [{
+                    title: d.rootTitle, docIcon: d.rootIcon, pin: false, active: true, instance: "Tab", action: "Tab",
+                    children: {
+                        notebookId: d.box, blockId: targetBlockId, rootId: d.rootID, mode: "wysiwyg", instance: "Editor",
+                        action: d.rootID === targetBlockId ? Constants.CB_GET_SCROLL : Constants.CB_GET_ALL,
+                    },
+                }];
+                const url = `${window.location.protocol}//${window.location.host}/stage/build/app/window.html?v=${Constants.SIYUAN_VERSION}&json=${encodeURIComponent(JSON.stringify(tab))}`;
+                const frame = document.createElement("iframe");
+                frame.src = url;
+                frame.style.cssText = "width:100%;height:420px;border:1px solid var(--b3-border-color);border-radius:6px";
+                parent.appendChild(frame);
+            });
         };
     }],
     ["timers", ({ctx, host}) => {
