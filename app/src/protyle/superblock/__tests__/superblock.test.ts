@@ -18,6 +18,7 @@ import {setFrozen, isFrozen} from "./featureFlags";
 import {parseEvery} from "./cron";
 import {matchHotkey} from "./hotkey";
 import {storageKey, storagePath} from "./storage";
+import {registerBlockDecorator} from "./blockDecorators";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -272,6 +273,21 @@ export async function run(): Promise<void> {
         const e2 = {el: document.createElement("div"), watch: () => {}};
         __features.get("embed")!.run(e2, {target: "x", view: "editable"});
         ok("embed.editable.fallback", (e2.el.textContent || "").includes("embed capability"));
+
+        // block decorators: a registered decorator augments matching native blocks
+        const probe = document.createElement("div");
+        probe.setAttribute("data-node-id", "20260101000000-probe01");
+        probe.setAttribute("data-type", "NodeParagraph");
+        document.body.appendChild(probe);
+        let decoCount = 0;
+        const offDeco = registerBlockDecorator({
+            id: "test-deco",
+            match: (el) => el.getAttribute("data-type") === "NodeParagraph",
+            decorate: (el) => { el.setAttribute("data-decorated", "1"); decoCount++; },
+        });
+        ok("decorate.applies", probe.getAttribute("data-decorated") === "1" && decoCount === 1);
+        offDeco();
+        ok("decorate.unregister", !probe.hasAttribute("data-sbdec-test-deco"));
     }
 
     // ---- search: full-text result mapping -------------------------------

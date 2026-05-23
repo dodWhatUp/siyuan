@@ -20,6 +20,7 @@ import {parseRRule, expandOccurrences, upcomingFires, nextFire, collectDueFires}
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 import {parseNlDate, parseQuickAdd, extractTags, extractPriority} from "./nlDate";
+import {registerBlockDecorator, listBlockDecorators} from "./blockDecorators";
 
 export const SUPERBLOCK_API_VERSION = "0.3.0";
 
@@ -47,6 +48,9 @@ export const registerSuperBlockAPI = () => {
         listProperties,
         getProperty,
         listCapabilities,
+        // block decorators — augment existing native blocks in place
+        registerBlockDecorator,
+        listBlockDecorators,
         // programmatic control
         insertSuperBlock,
         updateSuperBlock,

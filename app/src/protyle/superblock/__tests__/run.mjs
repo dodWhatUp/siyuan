@@ -15,7 +15,7 @@ import {fileURLToPath} from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.resolve(here, "..");
 const work = mkdtempSync(path.join(tmpdir(), "sbtest-"));
-const MODULES = ["builtinFeatures", "builtinProperties", "viewEngine", "reminderEngine", "reminderScheduler", "icsExport", "nlDate", "featureFlags", "cron", "hotkey", "storage"];
+const MODULES = ["builtinFeatures", "builtinProperties", "viewEngine", "reminderEngine", "reminderScheduler", "icsExport", "nlDate", "featureFlags", "cron", "hotkey", "storage", "blockDecorators"];
 
 for (const m of MODULES) {
     cpSync(path.join(src, m + ".ts"), path.join(work, m + ".ts"));
@@ -55,6 +55,9 @@ globalThis.document = dom.window.document;
 globalThis.Event = dom.window.Event;
 globalThis.Blob = dom.window.Blob;
 globalThis.URL = dom.window.URL;
+globalThis.MutationObserver = dom.window.MutationObserver;
+globalThis.Node = dom.window.Node;
+globalThis.HTMLElement = dom.window.HTMLElement;
 
 const mod = req(path.join(work, "test.cjs"));
 await mod.run();

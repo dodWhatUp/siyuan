@@ -26,9 +26,10 @@ import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {parseEvery} from "./cron";
 import {matchHotkey} from "./hotkey";
 import {storagePath} from "./storage";
+import {registerBlockDecorator, BlockDecorator} from "./blockDecorators";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -133,6 +134,10 @@ export interface SuperBlockCtx {
     // ("ws-main", "switch-protyle", "loaded-protyle-static", "sync-end", …); the
     // handler gets the CustomEvent (use e.detail). Auto-unsubscribed on unmount.
     on?: (event: string, handler: (e: CustomEvent) => void) => () => void;
+    // present with the "decorate" capability. Augment EXISTING native blocks in
+    // place: match(blockEl) → decorate(blockEl) (inject UI/behavior, read/write the
+    // block). Applies to current + future blocks; auto-unregistered on unmount.
+    decorate?: (def: BlockDecorator) => () => void;
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -194,7 +199,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -760,6 +765,13 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
         ctx.clipboard = {
             writeText: (text: string) => navigator.clipboard.writeText(text),
             readText: () => navigator.clipboard.readText(),
+        };
+    }],
+    ["decorate", ({ctx, host}) => {
+        ctx.decorate = (def: BlockDecorator): (() => void) => {
+            const off = registerBlockDecorator(def);
+            getDisposables(host).unmounts.push(off);
+            return off;
         };
     }],
     ["events", ({ctx, host}) => {
