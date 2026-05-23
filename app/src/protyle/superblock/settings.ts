@@ -12,7 +12,7 @@ import type {Capability} from "./runtime";
 
 // The capabilities exposed as global toggles. compute/ui are intentionally not
 // listed — disabling them just neuters blocks; the meaningful controls are these.
-const TOGGLEABLE: Capability[] = ["api", "network", "persist"];
+const TOGGLEABLE: Capability[] = ["api", "network", "persist", "libs"];
 
 const row = (id: string, label: string, hint: string, checked: boolean) => `<label class="fn__flex" style="padding: 6px 0; align-items: center">
     <input type="checkbox" id="${id}" class="b3-switch fn__flex-center"${checked ? " checked" : ""}>
@@ -43,7 +43,8 @@ export const openSuperBlockSettings = () => {
     ${TOGGLEABLE.map((cap) => row(`sbCap_${cap}`, `Disable "${cap}"`,
         cap === "api" ? "Block code cannot call the SiYuan kernel." :
             cap === "network" ? "Block code cannot make network requests." :
-                "Block code cannot read/write persisted state.",
+                cap === "libs" ? "Block code cannot load external libraries." :
+                    "Block code cannot read/write persisted state.",
         policy.disabled.includes(cap))).join("")}
     <div class="fn__hr"></div>
     <div class="fn__flex" style="align-items: center; padding: 8px 0">

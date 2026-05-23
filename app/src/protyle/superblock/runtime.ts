@@ -13,8 +13,9 @@ import {confirmDialog} from "../../dialog/confirmDialog";
 import {effectiveCaps, isKilled, hasGrant, addGrant} from "./policy";
 import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
+import {addScript} from "../util/addScript";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -40,6 +41,10 @@ export interface SuperBlockCtx {
     // Protyle editor for the target block into ctx.el — fully editable, unlike a
     // stock read-only embed. The nested editor is destroyed on re-render.
     embed?: (targetBlockId: string) => void;
+    // present only when the "libs" capability is enabled. Lazy-loads an
+    // allowlisted library from CDN (cached per session) and resolves to its
+    // global, e.g. `const Chart = await ctx.require("chartjs")`.
+    require?: (name: string) => Promise<unknown>;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -52,7 +57,16 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     hello: {caps: ["compute", "ui"]},
     data: {caps: ["compute", "ui", "persist"]},
     embed: {caps: ["compute", "ui", "embed"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed"]},
+    viz: {caps: ["compute", "ui", "libs"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs"]},
+};
+
+// Allowlisted libraries for ctx.require — pinned CDN builds and the global each
+// one exposes. The allowlist IS the control: a block can only load these.
+const LIB_ALLOW: Record<string, {url: string; global: string}> = {
+    chartjs: {url: "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", global: "Chart"},
+    d3: {url: "https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js", global: "d3"},
+    dayjs: {url: "https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.10/dayjs.min.js", global: "dayjs"},
 };
 
 // Nested Protyle editors mounted by ctx.embed, tracked per host so they can be
@@ -238,6 +252,16 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                 nestedEditors.set(host, list);
             }
             list.push(nested);
+        };
+    }
+    if (caps.includes("libs")) {
+        ctx.require = (name: string): Promise<unknown> => {
+            const lib = LIB_ALLOW[name];
+            if (!lib) {
+                return Promise.reject(new Error(`require: library not allowed (${name})`));
+            }
+            return addScript(lib.url, `sb-lib-${name}`)
+                .then(() => (window as unknown as Record<string, unknown>)[lib.global]);
         };
     }
     return ctx;
