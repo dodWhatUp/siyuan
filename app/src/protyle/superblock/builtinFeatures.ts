@@ -737,6 +737,37 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     ctx.watch?.(render);
 };
 
+// Embed: display another block here. "editable" mounts a real nested Protyle via
+// the embed capability (two-way, unlike SiYuan's read-only embed); "readonly"
+// fetches the target's markdown as a static snapshot. Advanced transclusion
+// (heading/section scope, block-ref resolution, query-result embeds) builds on this.
+const embedRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
+    const el = ctx.el as HTMLElement;
+    const target = String(cfg.target || "").trim();
+    const view = String(cfg.view || "editable");   // editable | readonly
+    if (!target) {
+        el.textContent = "Embed — set a target block id in block settings.";
+        return;
+    }
+    const render = () => {
+        el.innerHTML = "";
+        if (view === "readonly") {
+            const safeId = target.replace(/'/g, "");
+            ctx.api!.post!("/api/query/sql", {stmt: `SELECT markdown, content FROM blocks WHERE id='${safeId}'`}).then((r: IWebSocketData) => {
+                const row = ((r.data as Array<Record<string, unknown>>) || [])[0];
+                const box = document.createElement("div");
+                box.style.cssText = "border:1px solid var(--b3-border-color);border-radius:4px;padding:6px;font-size:13px;white-space:pre-wrap";
+                box.textContent = row ? String(row.markdown || row.content || "") : "(block not found)";
+                el.appendChild(box);
+            }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
+            return;
+        }
+        if (ctx.embed) { ctx.embed(target); } else { el.textContent = "embed capability unavailable"; }
+    };
+    render();
+    ctx.watch?.(render);
+};
+
 export const registerBuiltinFeatures = () => {
     // ---------------------------------------------------------------------
     // FROZEN (see featureFlags.ts): the calendar + database multi-view are the
@@ -790,5 +821,16 @@ export const registerBuiltinFeatures = () => {
             {key: "groupBy", label: "Group by (column name, optional)", type: "text"},
         ],
         run: queryRun,
+    });
+    registerFeature({
+        id: "embed",
+        label: "Embed",
+        caps: ["ui", "embed", "watch", "api"],
+        defaultConfig: {view: "editable"},
+        configSchema: [
+            {key: "target", label: "Target block id", type: "text"},
+            {key: "view", label: "Mode", type: "select", options: [{value: "editable", label: "Editable"}, {value: "readonly", label: "Read-only"}]},
+        ],
+        run: embedRun,
     });
 };

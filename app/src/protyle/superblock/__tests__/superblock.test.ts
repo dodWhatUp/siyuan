@@ -202,6 +202,20 @@ export async function run(): Promise<void> {
         const tabs = Array.from(vCtx.el.querySelectorAll("button")).map((b) => b.textContent);
         ok("search.savedviews.tabs", tabs.includes("All") && tabs.includes("By status"));
         ok("search.filter.input", !!vCtx.el.querySelector("input.b3-text-field"));
+
+        // embed read-only: fetches the target's markdown into a static box
+        const eCtx = {
+            el: document.createElement("div"),
+            api: {post: async () => ({data: [{markdown: "# Embedded heading", content: "Embedded heading"}]})},
+            watch: () => {},
+        };
+        __features.get("embed")!.run(eCtx, {target: "20260101-abc", view: "readonly"});
+        await tick();
+        ok("embed.readonly.content", (eCtx.el.textContent || "").includes("# Embedded heading"));
+        // embed editable falls back to a message when the embed capability is absent
+        const e2 = {el: document.createElement("div"), watch: () => {}};
+        __features.get("embed")!.run(e2, {target: "x", view: "editable"});
+        ok("embed.editable.fallback", (e2.el.textContent || "").includes("embed capability"));
     }
 
     // ---- search: full-text result mapping -------------------------------
