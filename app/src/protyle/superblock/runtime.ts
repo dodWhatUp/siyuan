@@ -311,15 +311,20 @@ const scheduleStateWrite = (blockId: string, json: string) => {
 // reused across re-renders/reloads of the same source. Keyed by the code string,
 // so identical code (common when the same preset is used repeatedly) compiles
 // once. Capped to avoid unbounded growth as code is edited.
-const compiled = new Map<string, (ctx: SuperBlockCtx) => void>();
-const compile = (code: string): (ctx: SuperBlockCtx) => void => {
+// User code is compiled as an ASYNC function body, so top-level `await` works
+// (e.g. `const r = await ctx.siyuan.api("/api/...")`). Errors surface as a rejected
+// promise, handled at the call site.
+const AsyncFunction = Object.getPrototypeOf(async () => { /* noop */ }).constructor as
+    new (arg: string, body: string) => (ctx: SuperBlockCtx) => Promise<void>;
+const compiled = new Map<string, (ctx: SuperBlockCtx) => Promise<void> | void>();
+const compile = (code: string): (ctx: SuperBlockCtx) => Promise<void> | void => {
     let fn = compiled.get(code);
     if (!fn) {
         if (compiled.size > 200) {
             compiled.clear();
         }
         // eslint-disable-next-line no-new-func
-        fn = new Function("ctx", code) as (ctx: SuperBlockCtx) => void;
+        fn = new AsyncFunction("ctx", code);
         compiled.set(code, fn);
     }
     return fn;
@@ -766,8 +771,15 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         // cap is simply absent (gating by omission) rather than confirm-gated.
         const caps = effectiveCaps(preset.caps);
         const fn = compile(code);
-        fn(buildCtx(blockId, host, caps));
+        const ret = fn(buildCtx(blockId, host, caps));
         finish();
+        // async user code: surface a rejection the same way as a sync throw.
+        if (ret && typeof (ret as Promise<void>).catch === "function") {
+            (ret as Promise<void>).catch((e: Error) => {
+                host.textContent = `super-block error: ${e.message}`;
+                emit("error", {blockId, kind, detail: e.message});
+            });
+        }
     } catch (e) {
         host.textContent = `super-block error: ${(e as Error).message}`;
         emit("error", {blockId, kind, detail: (e as Error).message});
