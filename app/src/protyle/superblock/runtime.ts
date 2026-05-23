@@ -209,12 +209,21 @@ const ensureGrant = (blockId: string, label: string, desc: string): Promise<bool
     });
 };
 
-const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): SuperBlockCtx => {
-    const ctx: SuperBlockCtx = {blockId};
-    if (caps.includes("ui")) {
+// A capability provider augments `ctx` for blocks whose preset enables its name.
+// Built-ins are seeded into CAP_PROVIDERS below; the plugin SPI (notes/09) will
+// register additional providers into the same map via registerCapability.
+interface CapEnv {
+    ctx: SuperBlockCtx;
+    blockId: string;
+    host: HTMLElement;
+}
+type CapProvider = (env: CapEnv) => void;
+
+export const CAP_PROVIDERS = new Map<string, CapProvider>([
+    ["ui", ({ctx, host}) => {
         ctx.el = host;
-    }
-    if (caps.includes("persist")) {
+    }],
+    ["persist", ({ctx, blockId, host}) => {
         // The IAL lives on the NodeHTMLBlock element, not the inner host.
         const blockEl = host.closest("[data-node-id]") as HTMLElement | null;
         let store: Record<string, unknown> = {};
@@ -237,35 +246,34 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                 }
             },
         };
-    }
-    if (caps.includes("api") || caps.includes("write")) {
-        ctx.api = {};
-        if (caps.includes("api")) {
-            ctx.api.post = async (path: string, body?: object): Promise<IWebSocketData> => {
-                if (!API_ALLOW.includes(path)) {
-                    throw new Error(`api: endpoint not allowed (${path})`);
-                }
-                if (!(await ensureGrant(blockId, "api", "read from the SiYuan kernel"))) {
-                    throw new Error("api: denied by user");
-                }
-                return fetchSyncPost(path, body || {});
-            };
-        }
-        if (caps.includes("write")) {
-            ctx.api.write = async (path: string, body?: object): Promise<IWebSocketData> => {
-                if (!WRITE_ALLOW.includes(path)) {
-                    throw new Error(`api.write: endpoint not allowed (${path})`);
-                }
-                if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
-                    throw new Error("write: denied by user");
-                }
-                // Audit: every write a block performs is logged.
-                console.log("[super-block write]", blockId.slice(-6), path, body);
-                return fetchSyncPost(path, body || {});
-            };
-        }
-    }
-    if (caps.includes("network")) {
+    }],
+    ["api", ({ctx, blockId}) => {
+        ctx.api = ctx.api || {};
+        ctx.api.post = async (path: string, body?: object): Promise<IWebSocketData> => {
+            if (!API_ALLOW.includes(path)) {
+                throw new Error(`api: endpoint not allowed (${path})`);
+            }
+            if (!(await ensureGrant(blockId, "api", "read from the SiYuan kernel"))) {
+                throw new Error("api: denied by user");
+            }
+            return fetchSyncPost(path, body || {});
+        };
+    }],
+    ["write", ({ctx, blockId}) => {
+        ctx.api = ctx.api || {};
+        ctx.api.write = async (path: string, body?: object): Promise<IWebSocketData> => {
+            if (!WRITE_ALLOW.includes(path)) {
+                throw new Error(`api.write: endpoint not allowed (${path})`);
+            }
+            if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
+                throw new Error("write: denied by user");
+            }
+            // Audit: every write a block performs is logged.
+            console.log("[super-block write]", blockId.slice(-6), path, body);
+            return fetchSyncPost(path, body || {});
+        };
+    }],
+    ["network", ({ctx, blockId}) => {
         ctx.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             // Per-domain grant: the host the block wants to reach is what's
             // confirmed and remembered, so each new domain re-prompts.
@@ -283,8 +291,8 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
             }
             return fetch(input, init);
         };
-    }
-    if (caps.includes("embed")) {
+    }],
+    ["embed", ({ctx, host}) => {
         ctx.embed = (targetBlockId: string) => {
             const editors = getAllEditor();
             const base = editors[0];
@@ -312,8 +320,8 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
             });
             getDisposables(host).editors.push(nested);
         };
-    }
-    if (caps.includes("timers")) {
+    }],
+    ["timers", ({ctx, host}) => {
         const d = getDisposables(host);
         ctx.setInterval = (handler: () => void, ms: number): number => {
             const id = window.setInterval(handler, ms);
@@ -328,8 +336,8 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
         ctx.onUnmount = (cb: () => void) => {
             d.unmounts.push(cb);
         };
-    }
-    if (caps.includes("watch")) {
+    }],
+    ["watch", ({ctx, host}) => {
         ctx.watch = (cb: () => void) => {
             const d = getDisposables(host);
             let timer = 0;
@@ -343,8 +351,8 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                 clearTimeout(timer);
             });
         };
-    }
-    if (caps.includes("libs")) {
+    }],
+    ["libs", ({ctx}) => {
         ctx.require = (name: string): Promise<unknown> => {
             const lib = LIB_ALLOW[name];
             if (!lib) {
@@ -353,7 +361,21 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
             return addScript(lib.url, `sb-lib-${name}`)
                 .then(() => (window as unknown as Record<string, unknown>)[lib.global]);
         };
-    }
+    }],
+]);
+
+// Build the gated ctx by running each enabled capability's provider. "compute"
+// has no provider (it's the baseline). Unknown caps are skipped. This loop is the
+// single extension point the plugin SPI will hook (notes/09).
+const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): SuperBlockCtx => {
+    const ctx: SuperBlockCtx = {blockId};
+    const env: CapEnv = {ctx, blockId, host};
+    caps.forEach((cap) => {
+        const provider = CAP_PROVIDERS.get(cap);
+        if (provider) {
+            provider(env);
+        }
+    });
     return ctx;
 };
 
