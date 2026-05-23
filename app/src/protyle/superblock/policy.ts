@@ -87,3 +87,8 @@ export const addGrant = (blockId: string, label: string) => {
 };
 
 export const clearGrants = () => localStorage.removeItem(GRANTS_KEY);
+
+// A compact string that changes whenever policy that affects rendering changes
+// (kill-switch, disabled caps). Used by the runtime's idempotent-render guard so
+// a policy change forces a re-run while an otherwise-unchanged block does not.
+export const policySignature = (): string => JSON.stringify(getPolicy());

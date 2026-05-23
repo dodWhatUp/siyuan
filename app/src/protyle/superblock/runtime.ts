@@ -10,7 +10,7 @@
 
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {confirmDialog} from "../../dialog/confirmDialog";
-import {effectiveCaps, isKilled, hasGrant, addGrant} from "./policy";
+import {effectiveCaps, isKilled, hasGrant, addGrant, policySignature} from "./policy";
 import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
 import {addScript} from "../util/addScript";
@@ -84,6 +84,8 @@ interface HostDisposables {
     unmounts: Array<() => void>;
 }
 const hostDisposables = new WeakMap<HTMLElement, HostDisposables>();
+// Last-rendered signature per host, for the idempotent-render guard (Seq 4).
+const hostSignatures = new WeakMap<HTMLElement, string>();
 const getDisposables = (host: HTMLElement): HostDisposables => {
     let d = hostDisposables.get(host);
     if (!d) {
@@ -312,6 +314,16 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 // Errors are contained — a throwing block shows an inline message, never breaks the doc.
 export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string) => {
     const preset = PRESETS[kind] || PRESETS.calc;
+    // Idempotent re-render (Seq 4): if nothing that affects output changed
+    // (kind, code, policy) and the host is already mounted, skip the whole
+    // teardown+rerun. This avoids rebuilding an expensive nested editor (embed)
+    // on a no-op re-render. Policy is in the signature so a settings change still
+    // forces a re-run.
+    const signature = `${kind}\n${policySignature()}\n${code}`;
+    if (hostSignatures.get(host) === signature && host.childNodes.length > 0) {
+        return;
+    }
+    hostSignatures.set(host, signature);
     // Destroy any nested editors from a previous mount before clearing the host.
     disposeSuperBlock(host);
     host.innerHTML = "";
