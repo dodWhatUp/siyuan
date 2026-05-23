@@ -11,6 +11,7 @@ import {
     insertSuperBlock, updateSuperBlock, getSuperBlockState, setSuperBlockState, rerenderSuperBlock,
     registerFeature, getFeature, listFeatures,
     registerProperty, getProperty, listProperties,
+    listCapabilities,
 } from "./runtime";
 import {applyFilter, applySort, applyGroup, applyManualOrder, applyView} from "./viewEngine";
 import {registerBuiltinFeatures} from "./builtinFeatures";
@@ -45,6 +46,7 @@ export const registerSuperBlockAPI = () => {
         getFeature,
         listProperties,
         getProperty,
+        listCapabilities,
         // programmatic control
         insertSuperBlock,
         updateSuperBlock,

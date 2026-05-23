@@ -974,6 +974,10 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
 // ctx for any preset that lists `name`; it stays behind the same user gates.
 export const registerCapability = (name: string, provider: CapProvider) => CAP_PROVIDERS.set(name, provider);
 
+// Introspection (dev/plugin tool): the live list of capability names a block can
+// enable — "compute" (baseline, no provider) plus every registered provider.
+export const listCapabilities = (): string[] => ["compute", ...Array.from(CAP_PROVIDERS.keys())];
+
 // Build the gated ctx by running each enabled capability's provider. "compute"
 // has no provider (it's the baseline). Unknown caps are skipped. This loop is the
 // single extension point the plugin SPI will hook (notes/09).

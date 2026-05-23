@@ -54,6 +54,22 @@ ctx.command("ctrl+shift+k", () => ctx.siyuan.showMessage("hotkey fired!"));`,
 ctx.cron("1s", () => { ctx.el.textContent = new Date().toLocaleTimeString(); });`,
     },
     {
+        name: "Super-block diagnostics (inventory)",
+        code:
+`// Live inventory: SPI version + all capabilities / features / properties / presets.
+const sb = ctx.siyuan.sb;
+const rows = [
+  ["SPI version", sb.version],
+  ["Capabilities (" + sb.listCapabilities().length + ")", sb.listCapabilities().join(", ")],
+  ["Features", sb.listFeatures().map(f => f.id).join(", ") || "(none)"],
+  ["Properties", sb.listProperties().map(p => p.id).join(", ") || "(none)"],
+  ["Presets", sb.listPresets().join(", ")],
+];
+ctx.el.innerHTML = "<table style='font-size:12px;border-collapse:collapse'>" +
+  rows.map(r => "<tr><td style='border:1px solid var(--b3-border-color);padding:2px 6px;font-weight:bold;white-space:nowrap'>" + r[0] +
+  "</td><td style='border:1px solid var(--b3-border-color);padding:2px 6px'>" + r[1] + "</td></tr>").join("") + "</table>";`,
+    },
+    {
         name: "Open a block on click",
         code:
 `// Click to focus a block (replace the id with a real block id).
