@@ -84,6 +84,9 @@ export interface SuperBlockCtx {
     // prompts a confirm. (Cell writes come via a later step on top of "write".)
     av?: {
         read: (avId: string) => Promise<{columns: unknown[]; rows: unknown[]; viewType: string}>;
+        // Write one cell (e.g. a date) back to the database. `data` is the typed
+        // cell-value object for that column type. Gated by the write confirm.
+        setCell: (op: {avID: string; rowID: string; keyID: string; cellID: string; data: unknown}) => Promise<IWebSocketData>;
     };
 }
 
@@ -456,6 +459,21 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 const view = (res?.data as {view?: {columns?: unknown[]; rows?: unknown[]}})?.view || {};
                 const viewType = (res?.data as {viewType?: string})?.viewType || "";
                 return {columns: view.columns || [], rows: view.rows || [], viewType};
+            },
+            setCell: async (op) => {
+                if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
+                    throw new Error("write: denied by user");
+                }
+                console.log("[super-block write] av-cell", blockId.slice(-6), op.avID, op.keyID);
+                emit("write", {blockId, detail: {avCell: op.keyID}});
+                // /api/transactions requires reqId (fetchSyncPost doesn't add it).
+                return fetchSyncPost("/api/transactions", {
+                    reqId: Date.now(),
+                    transactions: [{
+                        doOperations: [{action: "updateAttrViewCell", id: op.cellID, avID: op.avID, keyID: op.keyID, rowID: op.rowID, data: op.data}],
+                        undoOperations: [],
+                    }],
+                });
             },
         };
     }],
