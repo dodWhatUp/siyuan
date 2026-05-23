@@ -203,6 +203,21 @@ export async function run(): Promise<void> {
         ok("search.savedviews.tabs", tabs.includes("All") && tabs.includes("By status"));
         ok("search.filter.input", !!vCtx.el.querySelector("input.b3-text-field"));
 
+        // search result actions: a row with a block id is clickable → ctx.open(id)
+        const opened: Array<[string, boolean | undefined]> = [];
+        const oCtx = {
+            el: document.createElement("div"),
+            api: {post: async () => ({data: [{id: "20260101120000-abcdefg", content: "hello"}]})},
+            open: (id: string, nw?: boolean) => { opened.push([id, nw]); },
+            watch: () => {},
+        };
+        __features.get("query")!.run(oCtx, {source: "sql", query: "x", mode: "table"});
+        await tick();
+        const row = Array.from(oCtx.el.querySelectorAll("tr")).find((tr) => (tr as HTMLElement).onclick) as HTMLElement | undefined;
+        ok("search.open.clickable", !!row);
+        if (row) { (row as unknown as {onclick: () => void}).onclick(); }
+        ok("search.open.fires", opened.length === 1 && opened[0][0] === "20260101120000-abcdefg" && opened[0][1] === false);
+
         // embed read-only: fetches the target's markdown into a static box
         const eCtx = {
             el: document.createElement("div"),

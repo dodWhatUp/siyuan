@@ -12,6 +12,8 @@ import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {confirmDialog} from "../../dialog/confirmDialog";
 import {effectiveCaps, isKilled, hasGrant, addGrant, policySignature} from "./policy";
 import {getAllEditor} from "../../layout/getAll";
+import {openFileById} from "../../editor/util";
+import {openNewWindowById} from "../../window/openNewWindow";
 import {Constants} from "../../constants";
 import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
@@ -45,6 +47,9 @@ export interface SuperBlockCtx {
     // Protyle editor for the target block into ctx.el — fully editable, unlike a
     // stock read-only embed. The nested editor is destroyed on re-render.
     embed?: (targetBlockId: string) => void;
+    // present with the "ui" capability. Opens a block in the current tab (focused)
+    // or a new window — used by search results to make rows openable/editable.
+    open?: (id: string, newWindow?: boolean) => void;
     // present only when the "libs" capability is enabled. Lazy-loads an
     // allowlisted library from CDN (cached per session) and resolves to its
     // global, e.g. `const Chart = await ctx.require("chartjs")`.
@@ -360,6 +365,12 @@ type CapProvider = (env: CapEnv) => void;
 export const CAP_PROVIDERS = new Map<string, CapProvider>([
     ["ui", ({ctx, host}) => {
         ctx.el = host;
+        ctx.open = (id: string, newWindow?: boolean) => {
+            if (!id) { return; }
+            if (newWindow) { openNewWindowById(id); return; }
+            const app = getAllEditor()[0]?.protyle?.app;
+            if (app) { openFileById({app, id, action: [Constants.CB_GET_FOCUS, Constants.CB_GET_HL]}); }
+        };
     }],
     ["persist", ({ctx, blockId, host}) => {
         // The IAL lives on the NodeHTMLBlock element, not the inner host.

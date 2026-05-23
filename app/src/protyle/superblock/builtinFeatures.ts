@@ -52,15 +52,44 @@ const FT_DEFAULT_TYPES = {
     mathBlock: true, table: true, blockquote: true, superBlock: true, paragraph: true,
 };
 
-// Render a flat record list into `container` as a table or bulleted list.
-const renderRecordList = (container: HTMLElement, list: ViewRecord[], mode: string) => {
+// A SiYuan block id looks like 20260523083557-4j0mave. If a result row carries one
+// (via an `id` value, or its record id), the row becomes openable.
+const SB_ID_RE = /^\d{14}-[a-z0-9]{7}$/;
+const blockIdOf = (rec: ViewRecord): string | null => {
+    const v = rec.values.id;
+    if (typeof v === "string" && SB_ID_RE.test(v)) { return v; }
+    return SB_ID_RE.test(rec.id) ? rec.id : null;
+};
+
+// A small "open in new window" affordance for a result.
+const newWindowBtn = (id: string, open: (id: string, nw?: boolean) => void): HTMLElement => {
+    const b = document.createElement("span");
+    b.textContent = "⧉";
+    b.title = "Open in new window";
+    b.style.cssText = "cursor:pointer;margin-right:4px;opacity:.6";
+    b.onclick = (e) => { e.stopPropagation(); open(id, true); };
+    return b;
+};
+
+// Render a flat record list as a table or bulleted list. When `open` is given,
+// rows that carry a block id become clickable (open/edit it) with a new-window button.
+const renderRecordList = (container: HTMLElement, list: ViewRecord[], mode: string, open?: (id: string, nw?: boolean) => void) => {
     if (!list.length) { return; }
     const cols = Object.keys(list[0].values);
     if (mode === "list") {
         const ul = document.createElement("ul");
         list.forEach((rec) => {
             const li = document.createElement("li");
-            li.textContent = String(rec.values[cols[0]] ?? "");
+            const id = open ? blockIdOf(rec) : null;
+            if (id) {
+                li.appendChild(newWindowBtn(id, open!));
+                li.appendChild(document.createTextNode(String(rec.values[cols[0]] ?? "")));
+                li.style.cursor = "pointer";
+                li.title = "Click to open";
+                li.onclick = () => open!(id, false);
+            } else {
+                li.textContent = String(rec.values[cols[0]] ?? "");
+            }
             ul.appendChild(li);
         });
         container.appendChild(ul);
@@ -78,12 +107,23 @@ const renderRecordList = (container: HTMLElement, list: ViewRecord[], mode: stri
     table.appendChild(head);
     list.forEach((rec) => {
         const tr = document.createElement("tr");
-        cols.forEach((c) => {
+        const id = open ? blockIdOf(rec) : null;
+        cols.forEach((c, ci) => {
             const td = document.createElement("td");
-            td.textContent = String(rec.values[c] ?? "");
             td.style.cssText = "border:1px solid var(--b3-border-color);padding:2px 6px";
+            if (ci === 0 && id) {
+                td.appendChild(newWindowBtn(id, open!));
+                td.appendChild(document.createTextNode(String(rec.values[c] ?? "")));
+            } else {
+                td.textContent = String(rec.values[c] ?? "");
+            }
             tr.appendChild(td);
         });
+        if (id) {
+            tr.style.cursor = "pointer";
+            tr.title = "Click to open";
+            tr.onclick = () => open!(id, false);
+        }
         table.appendChild(tr);
     });
     container.appendChild(table);
@@ -111,10 +151,10 @@ export const quickFilterRecords = (records: ViewRecord[], query: string): ViewRe
 };
 
 // Paint a processed result (flat list or grouped map) into `container`.
-const paintRecords = (container: HTMLElement, processed: ViewRecord[] | Record<string, ViewRecord[]>, mode: string) => {
+const paintRecords = (container: HTMLElement, processed: ViewRecord[] | Record<string, ViewRecord[]>, mode: string, open?: (id: string, nw?: boolean) => void) => {
     if (Array.isArray(processed)) {
         if (!processed.length) { container.textContent = "no results"; return; }
-        renderRecordList(container, processed, mode);
+        renderRecordList(container, processed, mode, open);
         return;
     }
     const keys = Object.keys(processed);
@@ -126,7 +166,7 @@ const paintRecords = (container: HTMLElement, processed: ViewRecord[] | Record<s
         sum.textContent = `${k || "(empty)"}  (${processed[k].length})`;
         sum.style.cssText = "cursor:pointer;font-weight:bold;font-size:12px;margin:4px 0";
         det.appendChild(sum);
-        renderRecordList(det, processed[k], mode);
+        renderRecordList(det, processed[k], mode, open);
         container.appendChild(det);
     });
 };
@@ -140,7 +180,7 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const source = String(cfg.source || "sql");
     const stmt = String(cfg.query || (source === "fulltext"
         ? ""
-        : "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10"));
+        : "SELECT id, content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10"));
     const baseView: ViewConfig = {...((cfg.view as ViewConfig) || {})};
     const views = parseQueryViews(cfg);
     let activeView = 0;
@@ -164,7 +204,7 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         const vc: ViewConfig = {...baseView};
         if (v.groupBy) { vc.group = v.groupBy; }
         body.innerHTML = "";
-        paintRecords(body, applyView(quickFilterRecords(records, quickFilter), vc), v.mode);
+        paintRecords(body, applyView(quickFilterRecords(records, quickFilter), vc), v.mode, ctx.open);
     };
 
     // Repaint the whole feature: view-switcher tabs (if >1) + quick-filter box + body.
@@ -813,7 +853,7 @@ export const registerBuiltinFeatures = () => {
         id: "query",
         label: "Query / Search",
         caps: ["api", "ui", "watch"],
-        defaultConfig: {source: "sql", query: "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10", mode: "table"},
+        defaultConfig: {source: "sql", query: "SELECT id, content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10", mode: "table"},
         configSchema: [
             {key: "source", label: "Source", type: "select", options: [{value: "sql", label: "SQL"}, {value: "fulltext", label: "Full-text search"}]},
             {key: "query", label: "Query (SQL statement or search terms)", type: "code"},
