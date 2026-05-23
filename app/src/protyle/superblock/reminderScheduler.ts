@@ -81,10 +81,33 @@ export class ReminderScheduler {
             this.opts.notify(f);
             return;
         }
+        this.playBeep();
         try {
             if (typeof Notification !== "undefined" && Notification.permission === "granted") {
                 new Notification("⏰ " + f.title);
             }
         } catch { /* notification unavailable */ }
+    }
+
+    // Short two-tone chime (ported from the task plugin's reminder sound). Browser
+    // only; silently no-ops where Web Audio is unavailable (e.g. node tests).
+    private playBeep() {
+        try {
+            const AC = (window as unknown as {AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext});
+            const Ctor = AC.AudioContext || AC.webkitAudioContext;
+            if (!Ctor) { return; }
+            const ctx = new Ctor();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.setValueAtTime(660, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.4);
+        } catch { /* audio unavailable */ }
     }
 }

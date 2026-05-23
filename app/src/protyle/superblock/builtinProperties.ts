@@ -137,7 +137,13 @@ const editReminder = (_cell: unknown, metaIn: unknown): HTMLElement => {
             rep.appendChild(o);
         });
 
-    wrap.append(labelRow("Quick presets", presetRow), labelRow("Relative", rel), labelRow("At date/time", abs), labelRow("Repeat", rep));
+    const exc = document.createElement("input");
+    exc.className = "b3-text-field";
+    exc.placeholder = "skip dates: 2026-06-08, 2026-06-15";
+    exc.value = (meta.exceptions || []).map((t) => new Date(t).toISOString().slice(0, 10)).join(", ");
+
+    wrap.append(labelRow("Quick presets", presetRow), labelRow("Relative", rel), labelRow("At date/time", abs),
+        labelRow("Repeat", rep), labelRow("Skip dates (exceptions)", exc));
 
     (wrap as unknown as {getMeta: () => ReminderMeta}).getMeta = (): ReminderMeta => {
         const out: ReminderMeta = {};
@@ -145,6 +151,9 @@ const editReminder = (_cell: unknown, metaIn: unknown): HTMLElement => {
         if (rels.length) { out.relative = rels; }
         if (abs.value) { const t = new Date(abs.value).getTime(); if (!isNaN(t)) { out.remindAt = [t]; } }
         if (rep.value) { out.rrule = rep.value; }
+        const exs = exc.value.split(",").map((s) => s.trim()).filter(Boolean)
+            .map((s) => new Date(s + "T12:00:00").getTime()).filter((t) => !isNaN(t));
+        if (exs.length) { out.exceptions = exs; }
         return out;
     };
     return wrap;

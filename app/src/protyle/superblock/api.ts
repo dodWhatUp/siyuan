@@ -18,6 +18,7 @@ import {registerBuiltinProperties} from "./builtinProperties";
 import {parseRRule, expandOccurrences, upcomingFires, nextFire, collectDueFires} from "./reminderEngine";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
+import {parseNlDate, parseQuickAdd, extractTags, extractPriority} from "./nlDate";
 
 export const SUPERBLOCK_API_VERSION = "0.3.0";
 
@@ -56,6 +57,8 @@ export const registerSuperBlockAPI = () => {
         reminder: {parseRRule, expandOccurrences, upcomingFires, nextFire, collectDueFires, ReminderScheduler},
         // .ics export (notes/16) — task → calendar sync-out
         ics: {buildICS, icsFromRows, minutesToTrigger},
+        // natural-language quick-add (ported from task plugin)
+        nl: {parseNlDate, parseQuickAdd, extractTags, extractPriority},
     };
     // Register the core built-in features (query, …) so they're available by default.
     registerBuiltinFeatures();

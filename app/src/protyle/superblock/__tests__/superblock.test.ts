@@ -13,6 +13,7 @@ import {
     parseLocationString, parseLocationMeta, serializeLocationMeta,
 } from "./builtinProperties";
 import {parseRRule, expandOccurrences, upcomingFires, collectDueFires} from "./reminderEngine";
+import {parseNlDate, parseQuickAdd, extractTags} from "./nlDate";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -45,6 +46,9 @@ export async function run(): Promise<void> {
         ["2026-06-01T08:45", "2026-06-08T08:45"]);
     eq("fires.absolute.only", upcomingFires(base, {remindAt: [base + 36e5]}, base, base + 864e5).map(iso),
         ["2026-06-01T10:00"]);
+    // recurrence exceptions skip by local date (Jun 2 skipped)
+    eq("rrule.exceptions", expandOccurrences(base, parseRRule("FREQ=DAILY;COUNT=4"), base, base + 30 * 864e5, [D(2026, 5, 2, 0)]).map(iso),
+        ["2026-06-01T09:00", "2026-06-03T09:00", "2026-06-04T09:00"]);
 
     // collectDueFires skips rows without a reminder cell
     const dueRows = [
@@ -75,6 +79,14 @@ export async function run(): Promise<void> {
     const locSer = serializeLocationMeta(locMeta);
     ok("loc.serialize.schema", locSer.indexOf('"$schema":"siyuan-superblock/location@1"') >= 0 && locSer.indexOf('"lat":48.8584') >= 0);
     eq("loc.roundtrip.lat", parseLocationMeta(locSer)!.lat, 48.8584);
+
+    // ---- natural-language quick-add -------------------------------------
+    eq("nl.exactDate", (() => { const r = parseNlDate("review 2026-05-20"); return [new Date(r.dateMs!).getFullYear(), new Date(r.dateMs!).getMonth() + 1, new Date(r.dateMs!).getDate(), r.cleanedTitle]; })(),
+        [2026, 5, 20, "review"]);
+    eq("nl.tags", extractTags("ship it #work #urgent"), {tags: ["work", "urgent"], rest: "ship it"});
+    const qa = parseQuickAdd("Buy milk tomorrow 3pm #errand !high");
+    eq("nl.quickadd.fields", [qa.title, qa.tags, qa.priority, qa.hasTime, qa.dateMs !== undefined], ["Buy milk", ["errand"], "high", true, true]);
+    ok("nl.quickadd.time3pm", new Date(qa.dateMs!).getHours() === 15);
 
     // ---- .ics export -----------------------------------------------------
     eq("ics.trigger", [minutesToTrigger(-15), minutesToTrigger(-1440), minutesToTrigger(-90), minutesToTrigger(0)],

@@ -53,9 +53,10 @@ export const parseRRule = (s?: string): RRule | null => {
 export const expandOccurrences = (
     startTs: number, rule: RRule | null, winStart: number, winEnd: number, exceptions?: number[],
 ): number[] => {
-    const ex = new Set(exceptions || []);
+    const ymd = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+    const exDates = new Set((exceptions || []).map(ymd));   // skip by local date, not exact ms
     if (!rule) {
-        return (startTs >= winStart && startTs <= winEnd && !ex.has(startTs)) ? [startTs] : [];
+        return (startTs >= winStart && startTs <= winEnd && !exDates.has(ymd(startTs))) ? [startTs] : [];
     }
     const out: number[] = [];
     const base = new Date(startTs);
@@ -69,7 +70,7 @@ export const expandOccurrences = (
         if (t < startTs) { return true; }
         if (rule.until && t > rule.until) { return false; }   // stop BEFORE pushing the over-limit occurrence
         generated++;
-        if (t >= winStart && t <= winEnd && !ex.has(t)) { out.push(t); }
+        if (t >= winStart && t <= winEnd && !exDates.has(ymd(t))) { out.push(t); }
         return generated < cap && t <= winEnd;
     };
     if (rule.freq === "WEEKLY" && rule.byday && rule.byday.length) {
