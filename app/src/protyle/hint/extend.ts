@@ -186,6 +186,11 @@ export const hintSlash = (key: string, protyle: IProtyle) => {
         value: "<superblock>",
         html: '<div class="b3-list-item__first"><svg class="b3-list-item__graphic"><use xlink:href="#iconCode"></use></svg><span class="b3-list-item__text">Super Block</span></div>',
     }, {
+        filter: ["sbsettings", "sb settings", "super block settings"],
+        id: "sb-settings",
+        value: "<sb-settings>",
+        html: '<div class="b3-list-item__first"><svg class="b3-list-item__graphic"><use xlink:href="#iconSettings"></use></svg><span class="b3-list-item__text">Super Block — Settings</span></div>',
+    }, {
         value: "",
         id: "separator_2",
         html: "separator",

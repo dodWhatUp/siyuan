@@ -16,6 +16,7 @@ import {getContenteditableElement, hasNextSibling, hasPreviousSibling} from "../
 import {transaction, updateTransaction} from "../wysiwyg/transaction";
 import {insertHTML} from "../util/insertHTML";
 import {highlightRender} from "../render/highlightRender";
+import {openSuperBlockSettings} from "../superblock/settings";
 import {assetMenu, imgMenu, setFold} from "../../menus/protyle";
 import {hideElements} from "../ui/hideElements";
 import {fetchPost} from "../../util/fetch";
@@ -758,6 +759,12 @@ ${genHintItemHTML(item)}
                         return true;
                     }
                 });
+                return;
+            } else if (value === "<sb-settings>") {
+                // Super-block settings: clear the typed "/…" query, then open the
+                // policy dialog. Don't insert a block.
+                range.deleteContents();
+                openSuperBlockSettings();
                 return;
             } else {
                 range.deleteContents();

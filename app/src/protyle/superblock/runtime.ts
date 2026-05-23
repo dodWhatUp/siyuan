@@ -10,6 +10,7 @@
 
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {confirmDialog} from "../../dialog/confirmDialog";
+import {effectiveCaps, isKilled} from "./policy";
 
 export type Capability = "compute" | "ui" | "persist" | "api" | "network";
 
@@ -147,14 +148,22 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string) => {
     const preset = PRESETS[kind] || PRESETS.calc;
     host.innerHTML = "";
+    // Global kill-switch (policy.ts): no super-block code runs at all.
+    if (isKilled()) {
+        host.textContent = `super-block (${kind}) — disabled by settings`;
+        return;
+    }
     if (!code) {
         host.textContent = `super-block (${kind}) — no code`;
         return;
     }
     try {
+        // Drop globally-disabled capabilities before building ctx, so a disabled
+        // cap is simply absent (gating by omission) rather than confirm-gated.
+        const caps = effectiveCaps(preset.caps);
         // eslint-disable-next-line no-new-func
         const fn = new Function("ctx", code);
-        fn(buildCtx(blockId, host, preset.caps));
+        fn(buildCtx(blockId, host, caps));
     } catch (e) {
         host.textContent = `super-block error: ${(e as Error).message}`;
     }
