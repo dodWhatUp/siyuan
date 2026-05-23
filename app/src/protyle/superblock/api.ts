@@ -12,6 +12,7 @@ import {
     registerFeature, getFeature, listFeatures,
 } from "./runtime";
 import {applyFilter, applySort, applyGroup, applyManualOrder, applyView} from "./viewEngine";
+import {registerBuiltinFeatures} from "./builtinFeatures";
 
 export const SUPERBLOCK_API_VERSION = "0.2.0";
 
@@ -44,4 +45,6 @@ export const registerSuperBlockAPI = () => {
         // shared view engine (notes/15) — filter/sort/group/order for data features
         view: {applyFilter, applySort, applyGroup, applyManualOrder, applyView},
     };
+    // Register the core built-in features (query, …) so they're available by default.
+    registerBuiltinFeatures();
 };
