@@ -89,18 +89,64 @@ const renderRecordList = (container: HTMLElement, list: ViewRecord[], mode: stri
     container.appendChild(table);
 };
 
+// A saved view = a named {mode, groupBy} over the same query (Notion-style).
+interface QView { name: string; mode: string; groupBy?: string; }
+const parseQueryViews = (cfg: Record<string, unknown>): QView[] => {
+    const raw = cfg.views;
+    if (Array.isArray(raw) && raw.length) {
+        return (raw as Array<Record<string, unknown>>).map((v, i) => ({
+            name: String(v.name || `View ${i + 1}`),
+            mode: String(v.mode || cfg.mode || "table"),
+            groupBy: v.groupBy ? String(v.groupBy) : (cfg.groupBy ? String(cfg.groupBy) : undefined),
+        }));
+    }
+    return [{name: "View", mode: String(cfg.mode || "table"), groupBy: cfg.groupBy ? String(cfg.groupBy) : undefined}];
+};
+
+// Client-side quick filter: keep records where any value contains the query (ci).
+export const quickFilterRecords = (records: ViewRecord[], query: string): ViewRecord[] => {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) { return records; }
+    return records.filter((r) => Object.values(r.values).some((v) => String(v ?? "").toLowerCase().includes(q)));
+};
+
+// Paint a processed result (flat list or grouped map) into `container`.
+const paintRecords = (container: HTMLElement, processed: ViewRecord[] | Record<string, ViewRecord[]>, mode: string) => {
+    if (Array.isArray(processed)) {
+        if (!processed.length) { container.textContent = "no results"; return; }
+        renderRecordList(container, processed, mode);
+        return;
+    }
+    const keys = Object.keys(processed);
+    if (keys.reduce((n, k) => n + processed[k].length, 0) === 0) { container.textContent = "no results"; return; }
+    keys.forEach((k) => {
+        const det = document.createElement("details");
+        det.open = true;
+        const sum = document.createElement("summary");
+        sum.textContent = `${k || "(empty)"}  (${processed[k].length})`;
+        sum.style.cssText = "cursor:pointer;font-weight:bold;font-size:12px;margin:4px 0";
+        det.appendChild(sum);
+        renderRecordList(det, processed[k], mode);
+        container.appendChild(det);
+    });
+};
+
 // Query / Search: a SQL query OR a full-text search (config.source), rendered as
-// table|list through the shared view engine. With `groupBy` set, results render as
-// collapsible groups (Notion/Airtable style) with per-group counts. Gated api cap.
+// table|list through the shared view engine. Advanced: multiple saved `views` with
+// a switcher (tabs), per-view group-by with collapsible counts, and a live quick
+// filter box. Gated api cap.
 const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const el = ctx.el as HTMLElement;
     const source = String(cfg.source || "sql");
     const stmt = String(cfg.query || (source === "fulltext"
         ? ""
         : "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10"));
-    const mode = String(cfg.mode || "table");
-    const viewCfg: ViewConfig = {...((cfg.view as ViewConfig) || {})};
-    if (cfg.groupBy) { viewCfg.group = String(cfg.groupBy); }   // no-code group-by field
+    const baseView: ViewConfig = {...((cfg.view as ViewConfig) || {})};
+    const views = parseQueryViews(cfg);
+    let activeView = 0;
+    let quickFilter = "";
+    let records: ViewRecord[] = [];
+
     const fetchRecords = (): Promise<ViewRecord[]> => {
         if (source === "fulltext") {
             return ctx.api!.post!("/api/search/fullTextSearchBlock", {
@@ -111,34 +157,49 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         return ctx.api!.post!("/api/query/sql", {stmt}).then((r: IWebSocketData) =>
             ((r.data as Array<Record<string, unknown>>) || []).map((row, i) => ({id: String(row.id || i), values: row})));
     };
-    const render = () => {
-        el.textContent = "loading…";
-        fetchRecords().then((records: ViewRecord[]) => {
-            const processed = applyView(records, viewCfg);
-            el.innerHTML = "";
-            if (Array.isArray(processed)) {
-                if (!processed.length) { el.textContent = "no results"; return; }
-                renderRecordList(el, processed, mode);
-                return;
-            }
-            // grouped → collapsible <details> per group with a count
-            const keys = Object.keys(processed);
-            const total = keys.reduce((n, k) => n + processed[k].length, 0);
-            if (total === 0) { el.textContent = "no results"; return; }
-            keys.forEach((k) => {
-                const det = document.createElement("details");
-                det.open = true;
-                const sum = document.createElement("summary");
-                sum.textContent = `${k || "(empty)"}  (${processed[k].length})`;
-                sum.style.cssText = "cursor:pointer;font-weight:bold;font-size:12px;margin:4px 0";
-                det.appendChild(sum);
-                renderRecordList(det, processed[k], mode);
-                el.appendChild(det);
-            });
-        }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
+
+    // Repaint only the result body (keeps the filter input focused while typing).
+    const paintBody = (body: HTMLElement) => {
+        const v = views[activeView];
+        const vc: ViewConfig = {...baseView};
+        if (v.groupBy) { vc.group = v.groupBy; }
+        body.innerHTML = "";
+        paintRecords(body, applyView(quickFilterRecords(records, quickFilter), vc), v.mode);
     };
-    render();
-    ctx.watch?.(render);
+
+    // Repaint the whole feature: view-switcher tabs (if >1) + quick-filter box + body.
+    const paint = () => {
+        el.innerHTML = "";
+        const bar = document.createElement("div");
+        bar.style.cssText = "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap";
+        if (views.length > 1) {
+            views.forEach((v, i) => {
+                const btn = document.createElement("button");
+                btn.textContent = v.name;
+                btn.className = "b3-button " + (i === activeView ? "b3-button--text" : "b3-button--outline");
+                btn.onclick = () => { activeView = i; paint(); };
+                bar.appendChild(btn);
+            });
+        }
+        const body = document.createElement("div");
+        const filter = document.createElement("input");
+        filter.className = "b3-text-field";
+        filter.placeholder = "filter…";
+        filter.value = quickFilter;
+        filter.style.cssText = "flex:1;min-width:80px";
+        filter.oninput = () => { quickFilter = filter.value; paintBody(body); };
+        bar.appendChild(filter);
+        el.appendChild(bar);
+        el.appendChild(body);
+        paintBody(body);
+    };
+
+    const refresh = () => {
+        el.textContent = "loading…";
+        fetchRecords().then((r: ViewRecord[]) => { records = r; paint(); }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
+    };
+    refresh();
+    ctx.watch?.(refresh);
 };
 
 // Calendar: a month view over a database (Attribute View) by a date column —

@@ -7,7 +7,7 @@
 // database table location cell → write, board view group + drag-write).
 
 import {__features, registerFeature, registerProperty, getProperty} from "./runtime";
-import {registerBuiltinFeatures, mapFullTextBlocks} from "./builtinFeatures";
+import {registerBuiltinFeatures, mapFullTextBlocks, quickFilterRecords} from "./builtinFeatures";
 import {
     registerBuiltinProperties, offsetToMinutes,
     parseLocationString, parseLocationMeta, serializeLocationMeta,
@@ -189,6 +189,19 @@ export async function run(): Promise<void> {
         const summaries = Array.from(qCtx.el.querySelectorAll("summary")).map((s) => (s.textContent || "").replace(/\s+/g, " ").trim());
         ok("search.group.sections", qCtx.el.querySelectorAll("details").length === 2);
         ok("search.group.counts", summaries.includes("Todo (2)") && summaries.includes("Doing (1)"));
+
+        // saved views → switcher tabs + a quick-filter input present
+        const vCtx = {
+            el: document.createElement("div"),
+            api: {post: async () => ({data: [{id: "r1", status: "Todo", title: "A"}]})},
+            watch: () => {},
+        };
+        __features.get("query")!.run(vCtx, {source: "sql", query: "x",
+            views: [{name: "All", mode: "list"}, {name: "By status", mode: "list", groupBy: "status"}]});
+        await tick();
+        const tabs = Array.from(vCtx.el.querySelectorAll("button")).map((b) => b.textContent);
+        ok("search.savedviews.tabs", tabs.includes("All") && tabs.includes("By status"));
+        ok("search.filter.input", !!vCtx.el.querySelector("input.b3-text-field"));
     }
 
     // ---- search: full-text result mapping -------------------------------
@@ -199,6 +212,12 @@ export async function run(): Promise<void> {
         {id: "b1", values: {content: "buy milk today", path: "/Inbox", name: ""}},
         {id: "1", values: {content: "no id", path: "/x", name: "Doc"}},
     ]);
+
+    // ---- search: quick filter (pure) -----------------------------------
+    eq("search.filter.match", quickFilterRecords([
+        {id: "1", values: {a: "hello world"}}, {id: "2", values: {a: "goodbye"}},
+    ], "world").map((r) => r.id), ["1"]);
+    eq("search.filter.empty", quickFilterRecords([{id: "1", values: {a: "x"}}], "  ").length, 1);
 
     // ---- plugin extensibility (SPI stays open) --------------------------
     // A plugin registers a custom feature + property via the same registry the SPI
