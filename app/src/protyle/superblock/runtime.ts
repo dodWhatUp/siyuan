@@ -475,7 +475,10 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             // a SECOND time → doubled letters / cursor jumps. Stop the text-mutation
             // events at the wrapper so only the nested protyle (below it) handles them.
             // keydown/keyup still bubble so editor shortcuts keep working.
-            ["input", "beforeinput", "compositionstart", "compositionupdate", "compositionend"].forEach((type) => {
+            // Includes keydown/keyup so Enter/Backspace aren't applied a second time
+            // by the host (which would split the block twice → "double Enter"). The
+            // nested protyle's own handlers sit BELOW the wrapper, so they still fire.
+            ["input", "beforeinput", "compositionstart", "compositionupdate", "compositionend", "keydown", "keyup"].forEach((type) => {
                 wrap.addEventListener(type, (e) => e.stopPropagation());
             });
             getDisposables(host).editors.push(nested);

@@ -254,7 +254,9 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         fetchRecords().then((r: ViewRecord[]) => { records = r; paint(); }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
     };
     refresh();
-    ctx.watch?.(refresh);
+    // Live re-query on data changes — but NOT while showing editable embeds, where a
+    // refetch would tear down + rebuild the nested editors on every keystroke echo.
+    ctx.watch?.(() => { if (views[activeView].mode !== "embed") { refresh(); } });
 };
 
 // Calendar: a month view over a database (Attribute View) by a date column —
@@ -804,9 +806,9 @@ const embedRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         el.textContent = "Embed — set a target block id in block settings.";
         return;
     }
-    const render = () => {
-        el.innerHTML = "";
-        if (view === "readonly") {
+    if (view === "readonly") {
+        const render = () => {
+            el.innerHTML = "";
             const safeId = target.replace(/'/g, "");
             ctx.api!.post!("/api/query/sql", {stmt: `SELECT markdown, content FROM blocks WHERE id='${safeId}'`}).then((r: IWebSocketData) => {
                 const row = ((r.data as Array<Record<string, unknown>>) || [])[0];
@@ -815,12 +817,17 @@ const embedRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
                 box.textContent = row ? String(row.markdown || row.content || "") : "(block not found)";
                 el.appendChild(box);
             }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
-            return;
-        }
-        if (ctx.embed) { ctx.embed(target); } else { el.textContent = "embed capability unavailable"; }
-    };
-    render();
-    ctx.watch?.(render);
+        };
+        render();
+        ctx.watch?.(render);   // cheap re-fetch; safe to refresh
+        return;
+    }
+    // Editable: mount the nested editor ONCE. Re-running on ctx.watch (every
+    // websocket message) would destroy + rebuild the editor on each keystroke's
+    // server echo → an endless "refresh" loop and lost cursor. The nested protyle
+    // updates itself, so no watch subscription here.
+    el.innerHTML = "";
+    if (ctx.embed) { ctx.embed(target); } else { el.textContent = "embed capability unavailable"; }
 };
 
 export const registerBuiltinFeatures = () => {
