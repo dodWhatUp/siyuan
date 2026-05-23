@@ -17,7 +17,7 @@ import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -58,6 +58,15 @@ export interface SuperBlockCtx {
     // whenever the vault changes (any kernel WS message), so a query-view block
     // can refresh itself live. Auto-unsubscribed on unmount.
     watch?: (cb: () => void) => void;
+    // present only when the "self" capability is enabled. The block's own identity
+    // and IAL attributes — read/write its own `custom-*` attributes without the
+    // api/write gates (it's only touching itself). Foundation for ctx.bind.
+    self?: {
+        id: string;
+        docId: string;
+        getAttr: (key: string) => string | null;
+        setAttr: (key: string, value: string) => void;
+    };
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -68,11 +77,11 @@ export interface SuperBlockPreset {
 export const PRESETS: Record<string, SuperBlockPreset> = {
     calc: {caps: ["compute", "ui"]},
     hello: {caps: ["compute", "ui"]},
-    data: {caps: ["compute", "ui", "persist"]},
+    data: {caps: ["compute", "ui", "persist", "self"]},
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -402,6 +411,19 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 document.removeEventListener("sb-ws-main", handler);
                 clearTimeout(timer);
             });
+        };
+    }],
+    ["self", ({ctx, blockId, host}) => {
+        const blockEl = host.closest("[data-node-id]") as HTMLElement | null;
+        const docId = host.closest(".protyle")?.querySelector(".protyle-title")?.getAttribute("data-node-id") || "";
+        ctx.self = {
+            id: blockId,
+            docId,
+            getAttr: (key: string) => blockEl?.getAttribute(key) ?? null,
+            setAttr: (key: string, value: string) => {
+                blockEl?.setAttribute(key, value);
+                fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[key]: value}});
+            },
         };
     }],
     ["libs", ({ctx}) => {
