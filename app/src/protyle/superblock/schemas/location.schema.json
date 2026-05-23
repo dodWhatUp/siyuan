@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "siyuan-superblock/location@1",
+  "title": "Location",
+  "description": "Location data stored in a companion text column next to a canonical native `text` column (which holds the display name/address). Self-describing via embedded `$schema` + `_type`. Coordinates are WGS84 (the GPS default). See notes/16.",
+  "type": "object",
+  "required": ["_type", "lat", "lng"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "const": "siyuan-superblock/location@1" },
+    "_type": { "const": "location" },
+    "name": { "type": "string", "description": "Display name / label." },
+    "lat": { "type": "number", "minimum": -90, "maximum": 90, "description": "Latitude, WGS84 decimal degrees." },
+    "lng": { "type": "number", "minimum": -180, "maximum": 180, "description": "Longitude, WGS84 decimal degrees." },
+    "format": { "type": "string", "default": "wgs84", "description": "Coordinate reference system; default WGS84." },
+    "address": { "type": "string", "description": "Optional full postal address." },
+    "geojson": { "type": "object", "description": "Optional GeoJSON Point for interop, e.g. {\"type\":\"Point\",\"coordinates\":[lng,lat]}." }
+  },
+  "examples": [
+    { "$schema": "siyuan-superblock/location@1", "_type": "location",
+      "name": "Eiffel Tower", "lat": 48.8584, "lng": 2.2945, "format": "wgs84",
+      "address": "Champ de Mars, 5 Av. Anatole France, 75007 Paris, France" }
+  ]
+}

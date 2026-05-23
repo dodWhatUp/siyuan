@@ -151,6 +151,30 @@ export const registerFeature = (def: SuperBlockFeature) => features.set(def.id, 
 export const getFeature = (id: string): SuperBlockFeature | undefined => features.get(id);
 export const listFeatures = (): SuperBlockFeature[] => Array.from(features.values());
 
+// --- Property components (notes/16) -----------------------------------------
+// A value-level extension bound to ONE property/column: renders + edits a richer
+// value than the raw cell. The canonical native column stays a plain date/text;
+// the cohesive part lives in a self-describing JSON companion column ($schema +
+// _type). No new native AV type, no kernel fork. Reused across views (table cell,
+// calendar-chip popover, form field). Reads/writes go through gated ctx.av.
+export interface SuperBlockProperty {
+    id: string;
+    label: string;
+    baseType: string;                                  // native type of the CANONICAL column ("date" | "text" | …)
+    metaSchemaId?: string;                             // matches the "$schema" id in the companion JSON
+    configSchema?: ConfigField[];                      // no-code form (which columns are canonical / companion)
+    render?: (cell: unknown, meta: unknown) => HTMLElement;   // table cell / calendar-chip popover
+    edit?: (cell: unknown, meta: unknown) => HTMLElement;     // full editor (incl. simplified quick-form)
+    parse?: (raw: string) => unknown;                  // companion text → structured meta
+    serialize?: (meta: unknown) => string;             // structured meta → companion text
+    pluginId?: string;
+}
+
+const properties = new Map<string, SuperBlockProperty>();
+export const registerProperty = (def: SuperBlockProperty) => properties.set(def.id, def);
+export const getProperty = (id: string): SuperBlockProperty | undefined => properties.get(id);
+export const listProperties = (): SuperBlockProperty[] => Array.from(properties.values());
+
 // Lifecycle event bus (notes/09 SPI step 3). Plugins subscribe via the SPI's
 // on(); the runtime emits at mount/unmount/error/write/grant/render.
 export type SuperBlockEvent = "mounted" | "unmounted" | "error" | "write" | "grant" | "render";

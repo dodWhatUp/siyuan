@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "siyuan-superblock/reminder@1",
+  "title": "Reminder",
+  "description": "Cohesive reminder data stored in a companion text column next to a canonical native `date` column. Self-describing via the embedded `$schema` + `_type`. See notes/16.",
+  "type": "object",
+  "required": ["_type"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "const": "siyuan-superblock/reminder@1" },
+    "_type": { "const": "reminder" },
+    "relative": {
+      "type": "array",
+      "description": "Offsets relative to the canonical date. Negative = before, positive = after. Compact form, e.g. \"-15m\", \"-1d 2h\". Units: w d h m s.",
+      "items": { "type": "string", "pattern": "^[+-]?\\d+[wdhms](\\s*\\d+[wdhms])*$" }
+    },
+    "remindAt": {
+      "type": "array",
+      "description": "Absolute reminder fire times, epoch milliseconds.",
+      "items": { "type": "integer" }
+    },
+    "rrule": {
+      "type": "string",
+      "description": "iCal RRULE subset describing the repeat, e.g. \"FREQ=WEEKLY;BYDAY=MO\"."
+    },
+    "exceptions": {
+      "type": "array",
+      "description": "Excluded occurrence start times, epoch milliseconds.",
+      "items": { "type": "integer" }
+    }
+  },
+  "examples": [
+    { "$schema": "siyuan-superblock/reminder@1", "_type": "reminder",
+      "relative": ["-15m", "-1d"], "rrule": "FREQ=WEEKLY;BYDAY=MO", "exceptions": [] },
+    { "$schema": "siyuan-superblock/reminder@1", "_type": "reminder",
+      "remindAt": [1779138000000] }
+  ]
+}
