@@ -6,8 +6,10 @@
 // shadow-DOM sandbox. Plain HTML blocks (no marker) are never matched here, so the
 // existing HTML-block behaviour is untouched.
 //
-// Step 2 scope: detect marked blocks, mount a host, and RUN the block's code
-// (from custom-sb-code) through the capability-gated runtime. No editor yet.
+// Responsibilities: detect marked blocks, mount a light-DOM host, lazy-run the
+// block's code (custom-sb-code) when it nears the viewport, guard against
+// recursion (super-blocks nested inside an embed), and dispose nested editors
+// when a block is removed.
 
 import {runSuperBlock, disposeSuperBlock} from "../superblock/runtime";
 

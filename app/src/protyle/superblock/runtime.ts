@@ -1,12 +1,12 @@
 // Super-block runtime — compiles and runs a block's user code with a
 // capability-gated context (see notes/06-superblock-implementation-plan.md).
 //
-// Step 4b scope: compute + ui + persist + api + network. Gating by omission —
-// only the capabilities a preset enables are attached to `ctx`, so a smaller
-// profile is strictly cheaper and exposes less surface. `api`/`network` are also
-// off by default: each is granted only after a first-use confirm dialog (per
-// block, per capability, for the current session). Later steps add libs / timers
-// WITHOUT changing this contract.
+// Capabilities: compute + ui + persist + api + network + embed. Gating by
+// omission — only the capabilities a preset enables are attached to `ctx`, so a
+// smaller profile is strictly cheaper and exposes less surface. `api`/`network`
+// are off by default: each is granted only after a first-use confirm, then
+// remembered per device (policy.ts). Not yet built: libs (`ctx.require`) and
+// auto-cleaned timers — both will add to `ctx` WITHOUT changing this contract.
 
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {confirmDialog} from "../../dialog/confirmDialog";
@@ -33,7 +33,8 @@ export interface SuperBlockCtx {
         post: (path: string, body?: object) => Promise<IWebSocketData>;
     };
     // present only when the "network" capability is enabled. Pass-through to the
-    // browser fetch after a first-use confirm. (Domain allowlist comes later.)
+    // browser fetch after a first-use confirm; grants are per-domain (policy.ts),
+    // which doubles as the network allowlist.
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     // present only when the "embed" capability is enabled. Mounts a REAL nested
     // Protyle editor for the target block into ctx.el — fully editable, unlike a
@@ -77,6 +78,23 @@ export const disposeSuperBlock = (host: HTMLElement) => {
 };
 
 const SB_STATE = "custom-sb-state";
+
+// Debounce persisted-state writes per block: ctx.state.set updates the DOM
+// attribute synchronously (so a re-render sees it), but the kernel write is
+// coalesced — a fast counter that calls set() many times in a row produces one
+// setBlockAttrs, not dozens. The latest JSON always wins.
+const pendingStateWrites = new Map<string, {json: string; timer: number}>();
+const scheduleStateWrite = (blockId: string, json: string) => {
+    const existing = pendingStateWrites.get(blockId);
+    if (existing) {
+        clearTimeout(existing.timer);
+    }
+    const timer = window.setTimeout(() => {
+        pendingStateWrites.delete(blockId);
+        fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[SB_STATE]: json}});
+    }, 300);
+    pendingStateWrites.set(blockId, {json, timer});
+};
 
 // Compile-once cache (step 6a): a block's code is turned into a Function once and
 // reused across re-renders/reloads of the same source. Keyed by the code string,
@@ -150,8 +168,8 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                 store[key] = value;
                 const json = JSON.stringify(store);
                 if (blockEl) {
-                    blockEl.setAttribute(SB_STATE, json);
-                    fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[SB_STATE]: json}});
+                    blockEl.setAttribute(SB_STATE, json); // sync: re-render sees it
+                    scheduleStateWrite(blockId, json);     // debounced kernel write
                 }
             },
         };
