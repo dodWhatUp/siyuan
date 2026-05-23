@@ -16,6 +16,7 @@ import {parseRRule, expandOccurrences, upcomingFires, collectDueFires} from "./r
 import {parseNlDate, parseQuickAdd, extractTags} from "./nlDate";
 import {setFrozen, isFrozen} from "./featureFlags";
 import {parseEvery} from "./cron";
+import {matchHotkey} from "./hotkey";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -98,6 +99,16 @@ export async function run(): Promise<void> {
     // ---- cron interval parsing ------------------------------------------
     eq("cron.parse", [parseEvery(5000), parseEvery(500), parseEvery("30s"), parseEvery("5m"), parseEvery("1h"), parseEvery("1h30m"), parseEvery("2d"), parseEvery("2000"), parseEvery("nope")],
         [5000, 1000, 30000, 300000, 3600000, 5400000, 172800000, 2000, null]);
+
+    // ---- command hotkey matching ----------------------------------------
+    const k = (key: string, mods: Partial<{ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean}> = {}) =>
+        ({key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods});
+    ok("hotkey.ctrlk", matchHotkey("ctrl+k", k("k", {ctrlKey: true})));
+    ok("hotkey.ctrlk.no", !matchHotkey("ctrl+k", k("k")));
+    ok("hotkey.mod.meta", matchHotkey("mod+s", k("s", {metaKey: true})));
+    ok("hotkey.mod.ctrl", matchHotkey("mod+s", k("s", {ctrlKey: true})));
+    ok("hotkey.shift", matchHotkey("shift+a", k("a", {shiftKey: true})) && !matchHotkey("shift+a", k("a")));
+    ok("hotkey.wrongkey", !matchHotkey("ctrl+k", k("j", {ctrlKey: true})));
 
     // ---- .ics export -----------------------------------------------------
     eq("ics.trigger", [minutesToTrigger(-15), minutesToTrigger(-1440), minutesToTrigger(-90), minutesToTrigger(0)],

@@ -23,9 +23,10 @@ import {Menu} from "../../plugin/Menu";
 import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {parseEvery} from "./cron";
+import {matchHotkey} from "./hotkey";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -85,6 +86,17 @@ export interface SuperBlockCtx {
     // interval ("30s", "5m", "1h", "1h30m", "2d", or ms). Runs regardless of the
     // block's scroll position; auto-cleared on unmount/removal. Returns a cancel fn.
     cron?: (every: string | number, fn: () => void) => () => void;
+    // present with the "command" capability. Registers a keyboard shortcut
+    // ("ctrl+k", "mod+s", "alt+1", …) that runs fn; auto-removed on unmount.
+    command?: (hotkey: string, fn: () => void) => () => void;
+    // present with the "assets" capability. Work with the vault's attachments:
+    // upload a File/Blob (→ returns its asset path), read an asset's text, or get
+    // its served URL.
+    assets?: {
+        upload: (file: File | Blob, dir?: string) => Promise<string>;
+        read: (path: string) => Promise<string>;
+        url: (path: string) => string;
+    };
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -142,7 +154,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -576,6 +588,37 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             showMessage,   // toast notification
             Dialog,        // modal dialog (class)
             Menu,          // right-click / context menu (class)
+        };
+    }],
+    ["command", ({ctx, host}) => {
+        const d = getDisposables(host);
+        ctx.command = (hotkey: string, fn: () => void): (() => void) => {
+            const handler = (ev: KeyboardEvent) => {
+                if (matchHotkey(hotkey, ev)) {
+                    ev.preventDefault();
+                    try { fn(); } catch (e) { console.warn("[superblock] command error", e); }
+                }
+            };
+            document.addEventListener("keydown", handler);
+            const off = () => document.removeEventListener("keydown", handler);
+            d.unmounts.push(off);   // removed on unmount/removal
+            return off;
+        };
+    }],
+    ["assets", ({ctx}) => {
+        ctx.assets = {
+            // Upload a File/Blob to the vault assets folder; returns its asset path.
+            upload: async (file: File | Blob, dir?: string): Promise<string> => {
+                const fd = new FormData();
+                fd.append("assetsDirPath", dir || "/assets/");
+                fd.append("file[]", file);
+                const res = await fetch("/api/asset/upload", {method: "POST", body: fd});
+                const j = await res.json();
+                const succ = j && j.data && j.data.succMap;
+                return succ ? (Object.values(succ)[0] as string) : "";
+            },
+            read: (path: string) => fetch(path).then((r) => r.text()),
+            url: (path: string) => path,
         };
     }],
     ["cron", ({ctx, host}) => {
