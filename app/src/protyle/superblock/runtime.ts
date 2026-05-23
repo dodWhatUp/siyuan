@@ -17,7 +17,7 @@ import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -67,6 +67,10 @@ export interface SuperBlockCtx {
         getAttr: (key: string) => string | null;
         setAttr: (key: string, value: string) => void;
     };
+    // present only when the "bind" capability is enabled. Two-way binds a form
+    // control to one of the block's own attributes: the control shows the stored
+    // value, edits write back (debounced), and external changes update the control.
+    bind?: (attrKey: string, control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) => void;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -77,11 +81,11 @@ export interface SuperBlockPreset {
 export const PRESETS: Record<string, SuperBlockPreset> = {
     calc: {caps: ["compute", "ui"]},
     hello: {caps: ["compute", "ui"]},
-    data: {caps: ["compute", "ui", "persist", "self"]},
+    data: {caps: ["compute", "ui", "persist", "self", "bind"]},
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -424,6 +428,48 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 blockEl?.setAttribute(key, value);
                 fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[key]: value}});
             },
+        };
+    }],
+    ["bind", ({ctx, blockId, host}) => {
+        const blockEl = host.closest("[data-node-id]") as HTMLElement | null;
+        ctx.bind = (attrKey, control) => {
+            const isCheckbox = control instanceof HTMLInputElement && control.type === "checkbox";
+            const apply = (v: string) => {
+                if (isCheckbox) {
+                    (control as HTMLInputElement).checked = v === "true";
+                } else if (control.value !== v) {
+                    control.value = v;
+                }
+            };
+            // initial: control reflects the stored attribute
+            const initial = blockEl?.getAttribute(attrKey);
+            if (initial != null) {
+                apply(initial);
+            }
+            // control -> attribute (debounced kernel write)
+            let timer = 0;
+            const write = () => {
+                const value = isCheckbox ? String((control as HTMLInputElement).checked) : control.value;
+                blockEl?.setAttribute(attrKey, value);
+                clearTimeout(timer);
+                timer = window.setTimeout(
+                    () => fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[attrKey]: value}}), 300);
+            };
+            control.addEventListener("input", write);
+            control.addEventListener("change", write);
+            // attribute -> control on external change (don't clobber while editing)
+            const sync = () => {
+                if (document.activeElement === control) {
+                    return;
+                }
+                const v = blockEl?.getAttribute(attrKey);
+                if (v != null) {
+                    apply(v);
+                }
+            };
+            const onWs = () => window.setTimeout(sync, 50);
+            document.addEventListener("sb-ws-main", onWs);
+            getDisposables(host).unmounts.push(() => document.removeEventListener("sb-ws-main", onWs));
         };
     }],
     ["libs", ({ctx}) => {
