@@ -11,7 +11,7 @@
 import {Dialog} from "../../dialog";
 import {fetchPost} from "../../util/fetch";
 import {superblockRender} from "../render/superblockRender";
-import {getPreset, listPresets} from "./runtime";
+import {getPreset, listPresets, getFeature, listFeatures, SuperBlockFeature} from "./runtime";
 import {addScript} from "../util/addScript";
 import {setCodeTheme} from "../render/util";
 import {Constants} from "../../constants";
@@ -19,6 +19,87 @@ import {Constants} from "../../constants";
 const capsHint = (kind: string): string => {
     const preset = getPreset(kind);
     return preset ? `capabilities: ${preset.caps.join(", ")}` : "unknown preset";
+};
+
+// Build a no-code settings form from a feature's configSchema (notes/14 L3). Each
+// field becomes a labelled control; `data-key`/`data-ftype` let readConfigForm
+// collect typed values back out on Save. Smart pickers (av-database/av-column)
+// fall back to text inputs for now.
+const buildConfigForm = (feature: SuperBlockFeature, current: Record<string, unknown>): HTMLElement => {
+    const form = document.createElement("div");
+    const schema = feature.configSchema || [];
+    if (schema.length === 0) {
+        form.className = "ft__smaller ft__on-surface";
+        form.textContent = "This feature has no options.";
+        return form;
+    }
+    schema.forEach((field) => {
+        const row = document.createElement("div");
+        row.className = "fn__flex";
+        row.style.cssText = "align-items:center;margin:6px 0";
+        const label = document.createElement("div");
+        label.textContent = field.label;
+        label.style.cssText = "width:130px;flex-shrink:0";
+        row.appendChild(label);
+        const val = current[field.key];
+        let input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+        if (field.type === "select") {
+            const sel = document.createElement("select");
+            sel.className = "b3-select fn__flex-1";
+            field.options.forEach((o) => {
+                const op = document.createElement("option");
+                op.value = o.value;
+                op.textContent = o.label;
+                if (o.value === val) {
+                    op.selected = true;
+                }
+                sel.appendChild(op);
+            });
+            input = sel;
+        } else if (field.type === "checkbox") {
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.className = "b3-switch";
+            cb.checked = !!val;
+            input = cb;
+        } else if (field.type === "code") {
+            const ta = document.createElement("textarea");
+            ta.className = "b3-text-field fn__flex-1";
+            ta.style.cssText = "height:72px;font-family:var(--b3-font-family-code,monospace);white-space:pre";
+            ta.value = val != null ? String(val) : "";
+            input = ta;
+        } else {
+            const inp = document.createElement("input");
+            inp.className = "b3-text-field fn__flex-1";
+            if (field.type === "number") {
+                inp.type = "number";
+            }
+            inp.value = val != null ? String(val) : "";
+            input = inp;
+        }
+        input.setAttribute("data-key", field.key);
+        input.setAttribute("data-ftype", field.type);
+        row.appendChild(input);
+        form.appendChild(row);
+    });
+    return form;
+};
+
+const readConfigForm = (form: HTMLElement): Record<string, unknown> => {
+    const cfg: Record<string, unknown> = {};
+    form.querySelectorAll("[data-key]").forEach((el) => {
+        const key = el.getAttribute("data-key") as string;
+        const ft = el.getAttribute("data-ftype");
+        if (ft === "checkbox") {
+            cfg[key] = (el as HTMLInputElement).checked;
+        } else if (ft === "number") {
+            const v = (el as HTMLInputElement).value;
+            cfg[key] = v === "" ? null : Number(v);
+        } else {
+            cfg[key] = (el as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
+        }
+    });
+    return cfg;
 };
 
 // Style props shared by the textarea and the highlight <pre> so they overlap
@@ -119,8 +200,22 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
     const id = nodeElement.getAttribute("data-node-id") || "";
     const kind = nodeElement.getAttribute("custom-sb-kind") || "calc";
     const code = nodeElement.getAttribute("custom-sb-code") || "";
+    const currentConfig = (): Record<string, unknown> => {
+        try {
+            return JSON.parse(nodeElement.getAttribute("custom-sb-config") || "{}");
+        } catch {
+            return {};
+        }
+    };
 
-    const options = listPresets()
+    // The "type" picker lists presets (raw-code) AND features (config-driven).
+    const kinds = listPresets();
+    listFeatures().forEach((f) => {
+        if (!kinds.includes(f.id)) {
+            kinds.push(f.id);
+        }
+    });
+    const options = kinds
         .map((k) => `<option value="${k}"${k === kind ? " selected" : ""}>${k}</option>`)
         .join("");
 
@@ -129,13 +224,14 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
         width: "560px",
         content: `<div style="padding: 16px 24px">
     <div class="fn__flex" style="align-items: center; margin-bottom: 8px">
-        <span class="ft__on-surface">Preset</span>
+        <span class="ft__on-surface">Type</span>
         <div class="fn__space"></div>
         <select class="b3-select" id="sbKindSelect">${options}</select>
         <div class="fn__space"></div>
         <span class="ft__smaller ft__on-surface fn__flex-1" id="sbCapsHint">${capsHint(kind)}</span>
     </div>
-    <div class="ft__smaller ft__on-surface" style="margin-bottom: 8px">Code runs with <code class="fn__code">ctx</code> in scope (<code class="fn__code">ctx.el</code> = the block element).</div>
+    <div id="sbConfigForm" style="display:none"></div>
+    <div id="sbCodeHint" class="ft__smaller ft__on-surface" style="margin-bottom: 8px">Code runs with <code class="fn__code">ctx</code> in scope (<code class="fn__code">ctx.el</code> = the block element).</div>
     <textarea spellcheck="false"></textarea>
 </div>
 <div class="b3-dialog__action">
@@ -148,28 +244,52 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
     const textarea = dialog.element.querySelector("textarea") as HTMLTextAreaElement;
     textarea.value = code;
     attachHighlight(textarea);
-    textarea.focus();
-
-    // Keep the capability hint in sync with the chosen preset.
+    const codeWrap = textarea.parentElement as HTMLElement; // the wrap attachHighlight created
+    const configForm = dialog.element.querySelector("#sbConfigForm") as HTMLElement;
+    const codeHint = dialog.element.querySelector("#sbCodeHint") as HTMLElement;
     const select = dialog.element.querySelector("#sbKindSelect") as HTMLSelectElement;
     const hint = dialog.element.querySelector("#sbCapsHint") as HTMLElement;
-    select.addEventListener("change", () => {
-        hint.textContent = capsHint(select.value);
-    });
+
+    // Feature kind → config form (no-code); preset kind → code editor.
+    const toggleMode = (k: string) => {
+        const feature = getFeature(k);
+        if (feature) {
+            configForm.innerHTML = "";
+            configForm.appendChild(buildConfigForm(feature, {...(feature.defaultConfig || {}), ...currentConfig()}));
+            configForm.style.display = "";
+            codeWrap.style.display = "none";
+            codeHint.style.display = "none";
+            hint.textContent = `feature · ${feature.caps.join(", ")}`;
+        } else {
+            configForm.style.display = "none";
+            codeWrap.style.display = "";
+            codeHint.style.display = "";
+            hint.textContent = capsHint(k);
+        }
+    };
+    toggleMode(kind);
+    select.addEventListener("change", () => toggleMode(select.value));
 
     const buttons = dialog.element.querySelectorAll(".b3-dialog__action .b3-button");
     buttons[0].addEventListener("click", () => dialog.destroy());
     buttons[1].addEventListener("click", () => {
         const newKind = select.value;
-        const newCode = textarea.value;
-        // Update the DOM + re-render immediately, persist the attributes in the
-        // background, and close. (fetchPost's callback only fires conditionally,
-        // so closing/rendering must not depend on it.)
+        const feature = getFeature(newKind);
+        const attrs: Record<string, string> = {"custom-sb-kind": newKind};
         nodeElement.setAttribute("custom-sb-kind", newKind);
-        nodeElement.setAttribute("custom-sb-code", newCode);
+        if (feature) {
+            const json = JSON.stringify(readConfigForm(configForm));
+            nodeElement.setAttribute("custom-sb-config", json);
+            attrs["custom-sb-config"] = json;
+        } else {
+            const newCode = textarea.value;
+            nodeElement.setAttribute("custom-sb-code", newCode);
+            attrs["custom-sb-code"] = newCode;
+        }
+        // Update DOM + re-render immediately, persist in the background, close.
         nodeElement.removeAttribute("data-sb-rendered");
         superblockRender(nodeElement);
-        fetchPost("/api/attr/setBlockAttrs", {id, attrs: {"custom-sb-kind": newKind, "custom-sb-code": newCode}});
+        fetchPost("/api/attr/setBlockAttrs", {id, attrs});
         dialog.destroy();
     });
 };
