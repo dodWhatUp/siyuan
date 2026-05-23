@@ -916,8 +916,17 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         const ret = fn(buildCtx(blockId, host, caps));
         finish();
         // async user code: surface a rejection the same way as a sync throw.
-        if (ret && typeof (ret as Promise<void>).catch === "function") {
-            (ret as Promise<void>).catch((e: Error) => {
+        if (ret && typeof (ret as Promise<unknown>).then === "function") {
+            (ret as Promise<unknown>).then((val: unknown) => {
+                // Forgiving render: if the code RETURNED a string/number/Node and
+                // didn't write to ctx.el itself, show it automatically — so
+                // `return "hello"` or `return someElement` just works.
+                if (val != null && !host.firstChild && !host.textContent) {
+                    if (val instanceof Node) { host.appendChild(val); }
+                    else if (typeof val === "string" || typeof val === "number") { host.textContent = String(val); }
+                }
+            }).catch((e: Error) => {
+                // async user code: surface a rejection the same way as a sync throw.
                 host.textContent = `super-block error: ${e.message}`;
                 emit("error", {blockId, kind, detail: e.message});
             });
