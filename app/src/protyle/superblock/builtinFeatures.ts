@@ -37,18 +37,44 @@ const startReminderScheduler = (ctx: SuperBlockCtx, avId: string, dateKey: strin
     ctx.onUnmount(() => sched.stop());
 };
 
-// Query / Search: config = a SQL query + view (filter/sort/group) + table|list mode.
-// Reads via the gated api capability, normalizes rows, runs the shared view engine.
+// Full-text search blocks → ViewRecords (pure, testable). Strips <mark> highlights.
+export interface FtBlock { id?: string; content?: string; hPath?: string; name?: string; }
+const stripMark = (s: string): string => s.replace(/<\/?mark>/g, "");
+export const mapFullTextBlocks = (blocks: FtBlock[]): ViewRecord[] =>
+    (blocks || []).map((b, i) => ({
+        id: String(b.id || i),
+        values: {content: stripMark(b.content || ""), path: b.hPath || "", name: b.name || ""},
+    }));
+
+// Default block types for full-text search when the block doesn't specify its own.
+const FT_DEFAULT_TYPES = {
+    document: true, heading: true, list: true, listItem: true, codeBlock: true, htmlBlock: true,
+    mathBlock: true, table: true, blockquote: true, superBlock: true, paragraph: true,
+};
+
+// Query / Search: a SQL query OR a full-text search (config.source), rendered as
+// table|list through the shared view engine (filter/sort/group). Gated api cap.
 const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const el = ctx.el as HTMLElement;
-    const stmt = String(cfg.query || "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10");
+    const source = String(cfg.source || "sql");
+    const stmt = String(cfg.query || (source === "fulltext"
+        ? ""
+        : "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10"));
     const mode = String(cfg.mode || "table");
     const viewCfg = (cfg.view as ViewConfig) || {};
+    const fetchRecords = (): Promise<ViewRecord[]> => {
+        if (source === "fulltext") {
+            return ctx.api!.post!("/api/search/fullTextSearchBlock", {
+                query: stmt, method: 0, types: (cfg.types as object) || FT_DEFAULT_TYPES,
+                paths: [], groupBy: 0, orderBy: 0, page: 1,
+            }).then((r: IWebSocketData) => mapFullTextBlocks(((r.data as {blocks?: FtBlock[]}) || {}).blocks || []));
+        }
+        return ctx.api!.post!("/api/query/sql", {stmt}).then((r: IWebSocketData) =>
+            ((r.data as Array<Record<string, unknown>>) || []).map((row, i) => ({id: String(row.id || i), values: row})));
+    };
     const render = () => {
         el.textContent = "loading…";
-        ctx.api!.post!("/api/query/sql", {stmt}).then((r: IWebSocketData) => {
-            const rows = (r.data as Array<Record<string, unknown>>) || [];
-            const records: ViewRecord[] = rows.map((row, i) => ({id: String(row.id || i), values: row}));
+        fetchRecords().then((records: ViewRecord[]) => {
             const processed = applyView(records, viewCfg);
             const list: ViewRecord[] = Array.isArray(processed)
                 ? processed
@@ -673,9 +699,10 @@ export const registerBuiltinFeatures = () => {
         id: "query",
         label: "Query / Search",
         caps: ["api", "ui", "watch"],
-        defaultConfig: {query: "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10", mode: "table"},
+        defaultConfig: {source: "sql", query: "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10", mode: "table"},
         configSchema: [
-            {key: "query", label: "SQL query", type: "code"},
+            {key: "source", label: "Source", type: "select", options: [{value: "sql", label: "SQL"}, {value: "fulltext", label: "Full-text search"}]},
+            {key: "query", label: "Query (SQL statement or search terms)", type: "code"},
             {key: "mode", label: "View", type: "select", options: [{value: "table", label: "Table"}, {value: "list", label: "List"}]},
         ],
         run: queryRun,

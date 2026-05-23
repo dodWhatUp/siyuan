@@ -7,7 +7,7 @@
 // database table location cell → write, board view group + drag-write).
 
 import {__features, registerFeature, registerProperty, getProperty} from "./runtime";
-import {registerBuiltinFeatures} from "./builtinFeatures";
+import {registerBuiltinFeatures, mapFullTextBlocks} from "./builtinFeatures";
 import {
     registerBuiltinProperties, offsetToMinutes,
     parseLocationString, parseLocationMeta, serializeLocationMeta,
@@ -174,6 +174,15 @@ export async function run(): Promise<void> {
             /\(\d+\)\s*$/.test(d.textContent || "") && (d as HTMLElement).style.fontWeight === "bold");
         ok("board.columns", headers.length === 2);
     }
+
+    // ---- search: full-text result mapping -------------------------------
+    eq("search.fulltext.map", mapFullTextBlocks([
+        {id: "b1", content: "buy <mark>milk</mark> today", hPath: "/Inbox"},
+        {content: "no id", hPath: "/x", name: "Doc"},
+    ]), [
+        {id: "b1", values: {content: "buy milk today", path: "/Inbox", name: ""}},
+        {id: "1", values: {content: "no id", path: "/x", name: "Doc"}},
+    ]);
 
     // ---- plugin extensibility (SPI stays open) --------------------------
     // A plugin registers a custom feature + property via the same registry the SPI
