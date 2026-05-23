@@ -17,6 +17,7 @@ import {parseNlDate, parseQuickAdd, extractTags} from "./nlDate";
 import {setFrozen, isFrozen} from "./featureFlags";
 import {parseEvery} from "./cron";
 import {matchHotkey} from "./hotkey";
+import {storageKey, storagePath} from "./storage";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -112,6 +113,10 @@ export async function run(): Promise<void> {
     // macOS: Option+1 yields key "¡" but code "Digit1" → must still match "alt+1"
     ok("hotkey.mac.option1", matchHotkey("alt+1", {key: "¡", code: "Digit1", ctrlKey: false, shiftKey: false, altKey: true, metaKey: false}));
     ok("hotkey.ctrlshiftk", matchHotkey("ctrl+shift+k", {key: "K", code: "KeyK", ctrlKey: true, shiftKey: true, altKey: false, metaKey: false}));
+
+    // ---- storage key sanitizing -----------------------------------------
+    eq("storage.key", [storageKey("my key!"), storageKey("../etc/passwd"), storageKey("")], ["my_key_", "___etc_passwd", "_"]);
+    eq("storage.path", storagePath("notes"), "/data/storage/superblock/notes.json");
 
     // ---- .ics export -----------------------------------------------------
     eq("ics.trigger", [minutesToTrigger(-15), minutesToTrigger(-1440), minutesToTrigger(-90), minutesToTrigger(0)],

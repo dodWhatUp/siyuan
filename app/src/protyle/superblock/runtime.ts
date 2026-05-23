@@ -24,9 +24,10 @@ import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {parseEvery} from "./cron";
 import {matchHotkey} from "./hotkey";
+import {storagePath} from "./storage";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -97,6 +98,13 @@ export interface SuperBlockCtx {
         read: (path: string) => Promise<string>;
         url: (path: string) => string;
     };
+    // present with the "storage" capability. Persistent JSON key-value, stored in
+    // the workspace and shared across blocks/reloads (vs "persist" = per-block IAL).
+    storage?: {
+        get: (key: string) => Promise<unknown>;
+        set: (key: string, value: unknown) => Promise<void>;
+        remove: (key: string) => Promise<void>;
+    };
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -154,7 +162,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -619,6 +627,37 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             },
             read: (path: string) => fetch(path).then((r) => r.text()),
             url: (path: string) => path,
+        };
+    }],
+    ["storage", ({ctx}) => {
+        ctx.storage = {
+            set: async (key: string, value: unknown): Promise<void> => {
+                const fd = new FormData();
+                fd.append("path", storagePath(key));
+                fd.append("isDir", "false");
+                fd.append("file", new Blob([JSON.stringify(value)], {type: "application/json"}));
+                await fetch("/api/file/putFile", {method: "POST", body: fd});
+            },
+            get: async (key: string): Promise<unknown> => {
+                const res = await fetch("/api/file/getFile", {
+                    method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({path: storagePath(key)}),
+                });
+                if (!res.ok) { return null; }
+                const t = await res.text();
+                try {
+                    const parsed = JSON.parse(t);
+                    // getFile returns a {code:404,…} JSON for a missing file → treat as null.
+                    if (parsed && typeof parsed === "object" && (parsed as {code?: number}).code === 404) { return null; }
+                    return parsed;
+                } catch { return null; }
+            },
+            remove: async (key: string): Promise<void> => {
+                await fetch("/api/file/removeFile", {
+                    method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({path: storagePath(key)}),
+                });
+            },
         };
     }],
     ["cron", ({ctx, host}) => {

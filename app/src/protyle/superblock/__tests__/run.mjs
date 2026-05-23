@@ -15,7 +15,7 @@ import {fileURLToPath} from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.resolve(here, "..");
 const work = mkdtempSync(path.join(tmpdir(), "sbtest-"));
-const MODULES = ["builtinFeatures", "builtinProperties", "viewEngine", "reminderEngine", "reminderScheduler", "icsExport", "nlDate", "featureFlags", "cron", "hotkey"];
+const MODULES = ["builtinFeatures", "builtinProperties", "viewEngine", "reminderEngine", "reminderScheduler", "icsExport", "nlDate", "featureFlags", "cron", "hotkey", "storage"];
 
 for (const m of MODULES) {
     cpSync(path.join(src, m + ".ts"), path.join(work, m + ".ts"));
