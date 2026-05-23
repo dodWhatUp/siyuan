@@ -9,7 +9,7 @@
 // doc's undo stack yet (setBlockAttrs bypasses it).
 
 import {Dialog} from "../../dialog";
-import {fetchPost} from "../../util/fetch";
+import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {superblockRender} from "../render/superblockRender";
 import {getPreset, listPresets, getFeature, listFeatures, SuperBlockFeature} from "./runtime";
 import {addScript} from "../util/addScript";
@@ -21,10 +21,29 @@ const capsHint = (kind: string): string => {
     return preset ? `capabilities: ${preset.caps.join(", ")}` : "unknown preset";
 };
 
+// Databases available to pick from (current doc's Attribute View blocks).
+const listDatabases = (): {avId: string; name: string}[] => {
+    const out: {avId: string; name: string}[] = [];
+    document.querySelectorAll('[data-type="NodeAttributeView"][data-av-id]').forEach((el) => {
+        const avId = el.getAttribute("data-av-id") || "";
+        const name = (el.querySelector(".av__title") as HTMLElement)?.textContent?.trim() || "Database";
+        if (avId && !out.find((d) => d.avId === avId)) {
+            out.push({avId, name});
+        }
+    });
+    return out;
+};
+
+const fetchAvColumns = (avId: string): Promise<{id: string; name: string; type: string}[]> =>
+    fetchSyncPost("/api/av/renderAttributeView", {id: avId, reqId: Date.now()}).then((r: IWebSocketData) => {
+        const cols = ((r?.data as {view?: {columns?: {id: string; name: string; type: string}[]}})?.view?.columns) || [];
+        return cols.map((c) => ({id: c.id, name: c.name, type: c.type}));
+    });
+
 // Build a no-code settings form from a feature's configSchema (notes/14 L3). Each
 // field becomes a labelled control; `data-key`/`data-ftype` let readConfigForm
-// collect typed values back out on Save. Smart pickers (av-database/av-column)
-// fall back to text inputs for now.
+// collect typed values back out on Save. `av-database`/`av-column` are dropdowns
+// (the column list re-populates from the chosen database, reactively).
 const buildConfigForm = (feature: SuperBlockFeature, current: Record<string, unknown>): HTMLElement => {
     const form = document.createElement("div");
     const schema = feature.configSchema || [];
@@ -68,6 +87,26 @@ const buildConfigForm = (feature: SuperBlockFeature, current: Record<string, unk
             ta.style.cssText = "height:72px;font-family:var(--b3-font-family-code,monospace);white-space:pre";
             ta.value = val != null ? String(val) : "";
             input = ta;
+        } else if (field.type === "av-database") {
+            const sel = document.createElement("select");
+            sel.className = "b3-select fn__flex-1";
+            const empty = document.createElement("option");
+            empty.value = ""; empty.textContent = "— pick database —";
+            sel.appendChild(empty);
+            listDatabases().forEach((d) => {
+                const op = document.createElement("option");
+                op.value = d.avId; op.textContent = d.name;
+                if (d.avId === val) {
+                    op.selected = true;
+                }
+                sel.appendChild(op);
+            });
+            input = sel;
+        } else if (field.type === "av-column") {
+            const sel = document.createElement("select");
+            sel.className = "b3-select fn__flex-1";
+            sel.setAttribute("data-ofkey", field.ofKey); // db field this depends on
+            input = sel; // options populated reactively after the form is built
         } else {
             const inp = document.createElement("input");
             inp.className = "b3-text-field fn__flex-1";
@@ -81,6 +120,36 @@ const buildConfigForm = (feature: SuperBlockFeature, current: Record<string, unk
         input.setAttribute("data-ftype", field.type);
         row.appendChild(input);
         form.appendChild(row);
+    });
+    // Reactive wiring: each av-column select repopulates from its av-database select.
+    form.querySelectorAll('[data-ftype="av-column"]').forEach((colEl) => {
+        const colSel = colEl as HTMLSelectElement;
+        const ofKey = colSel.getAttribute("data-ofkey");
+        const dbSel = form.querySelector(`[data-key="${ofKey}"]`) as HTMLSelectElement | null;
+        const want = current[colSel.getAttribute("data-key") as string];
+        const populate = (avId: string) => {
+            colSel.innerHTML = "";
+            const empty = document.createElement("option");
+            empty.value = ""; empty.textContent = "— pick column —";
+            colSel.appendChild(empty);
+            if (!avId) {
+                return;
+            }
+            fetchAvColumns(avId).then((cols) => {
+                cols.forEach((c) => {
+                    const op = document.createElement("option");
+                    op.value = c.id; op.textContent = `${c.name} (${c.type})`;
+                    if (c.id === want) {
+                        op.selected = true;
+                    }
+                    colSel.appendChild(op);
+                });
+            });
+        };
+        if (dbSel) {
+            populate(dbSel.value);
+            dbSel.addEventListener("change", () => populate(dbSel.value));
+        }
     });
     return form;
 };
