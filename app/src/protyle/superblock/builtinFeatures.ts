@@ -204,7 +204,22 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         const vc: ViewConfig = {...baseView};
         if (v.groupBy) { vc.group = v.groupBy; }
         body.innerHTML = "";
-        paintRecords(body, applyView(quickFilterRecords(records, quickFilter), vc), v.mode, ctx.open);
+        const recs = quickFilterRecords(records, quickFilter);
+        // "embed" mode: render each result as a LIVE EDITABLE nested block (Roam/
+        // Logseq style), reusing ctx.embed. Edit results in place, not just open them.
+        if (v.mode === "embed") {
+            if (!ctx.embed) { body.textContent = "embed capability unavailable"; return; }
+            if (!recs.length) { body.textContent = "no results"; return; }
+            recs.forEach((rec) => {
+                const id = blockIdOf(rec);
+                const w = document.createElement("div");
+                w.style.cssText = "margin:4px 0;border:1px solid var(--b3-border-color);border-radius:4px;padding:2px";
+                body.appendChild(w);
+                if (id) { ctx.embed!(id, w); } else { w.textContent = String(Object.values(rec.values)[0] ?? "") + "  (no block id — add id to the query)"; }
+            });
+            return;
+        }
+        paintRecords(body, applyView(recs, vc), v.mode, ctx.open);
     };
 
     // Repaint the whole feature: view-switcher tabs (if >1) + quick-filter box + body.
@@ -852,12 +867,12 @@ export const registerBuiltinFeatures = () => {
     registerFeature({
         id: "query",
         label: "Query / Search",
-        caps: ["api", "ui", "watch"],
+        caps: ["api", "ui", "watch", "embed"],
         defaultConfig: {source: "sql", query: "SELECT id, content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10", mode: "table"},
         configSchema: [
             {key: "source", label: "Source", type: "select", options: [{value: "sql", label: "SQL"}, {value: "fulltext", label: "Full-text search"}]},
             {key: "query", label: "Query (SQL statement or search terms)", type: "code"},
-            {key: "mode", label: "View", type: "select", options: [{value: "table", label: "Table"}, {value: "list", label: "List"}]},
+            {key: "mode", label: "View", type: "select", options: [{value: "table", label: "Table"}, {value: "list", label: "List"}, {value: "embed", label: "Editable blocks"}]},
             {key: "groupBy", label: "Group by (column name, optional)", type: "text"},
         ],
         run: queryRun,

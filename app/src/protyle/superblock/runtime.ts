@@ -46,7 +46,7 @@ export interface SuperBlockCtx {
     // present only when the "embed" capability is enabled. Mounts a REAL nested
     // Protyle editor for the target block into ctx.el — fully editable, unlike a
     // stock read-only embed. The nested editor is destroyed on re-render.
-    embed?: (targetBlockId: string) => void;
+    embed?: (targetBlockId: string, container?: HTMLElement) => void;
     // present with the "ui" capability. Opens a block in the current tab (focused)
     // or a new window — used by search results to make rows openable/editable.
     open?: (id: string, newWindow?: boolean) => void;
@@ -443,18 +443,19 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
         };
     }],
     ["embed", ({ctx, host}) => {
-        ctx.embed = (targetBlockId: string) => {
+        ctx.embed = (targetBlockId: string, container?: HTMLElement) => {
+            const parent = container || host;
             const editors = getAllEditor();
             const base = editors[0];
             if (!base) {
                 const note = document.createElement("div");
                 note.textContent = "embed: no editor available";
-                host.appendChild(note);
+                parent.appendChild(note);
                 return;
             }
             const wrap = document.createElement("div");
             wrap.className = "sb-embed";
-            host.appendChild(wrap);
+            parent.appendChild(wrap);
             // Construct via the existing editor's class (avoids a hard import +
             // import cycle); app comes from that editor's IProtyle.
             const ProtyleCtor = base.constructor as new (
@@ -467,6 +468,15 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 // block back in and recurse.
                 action: [Constants.CB_GET_ALL],
                 render: {background: false, title: false, gutter: true, scroll: false, breadcrumb: true},
+            });
+            // DUAL-ID FIX (editable-embed findings): the nested editor's DOM lives
+            // inside the HOST doc's protyle, so editing events bubble up to the host's
+            // input pipeline (input.ts querySelectorAll by data-node-id) and get applied
+            // a SECOND time → doubled letters / cursor jumps. Stop the text-mutation
+            // events at the wrapper so only the nested protyle (below it) handles them.
+            // keydown/keyup still bubble so editor shortcuts keep working.
+            ["input", "beforeinput", "compositionstart", "compositionupdate", "compositionend"].forEach((type) => {
+                wrap.addEventListener(type, (e) => e.stopPropagation());
             });
             getDisposables(host).editors.push(nested);
         };

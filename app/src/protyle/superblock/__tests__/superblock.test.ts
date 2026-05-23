@@ -218,6 +218,18 @@ export async function run(): Promise<void> {
         if (row) { (row as unknown as {onclick: () => void}).onclick(); }
         ok("search.open.fires", opened.length === 1 && opened[0][0] === "20260101120000-abcdefg" && opened[0][1] === false);
 
+        // search "embed" mode: each result with a block id is embedded via ctx.embed
+        const embedded: string[] = [];
+        const emCtx = {
+            el: document.createElement("div"),
+            api: {post: async () => ({data: [{id: "20260101120000-abcdefg", content: "x"}]})},
+            embed: (id: string, container?: HTMLElement) => { embedded.push(id); if (container) { container.textContent = "[embedded]"; } },
+            watch: () => {},
+        };
+        __features.get("query")!.run(emCtx, {source: "sql", query: "x", mode: "embed"});
+        await tick();
+        ok("search.embedmode.calls", embedded.length === 1 && embedded[0] === "20260101120000-abcdefg");
+
         // embed read-only: fetches the target's markdown into a static box
         const eCtx = {
             el: document.createElement("div"),
