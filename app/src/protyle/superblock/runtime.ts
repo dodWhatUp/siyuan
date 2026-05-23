@@ -17,7 +17,7 @@ import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -78,6 +78,13 @@ export interface SuperBlockCtx {
         emit: (data: unknown) => void;
         on: (cb: (data: unknown) => void) => void;
     };
+    // present only when the "av" capability is enabled. Reads a SiYuan database
+    // (Attribute View) — its columns + rows — so a block can render views the
+    // native database lacks (calendar, timeline, …). Read-only here; first use
+    // prompts a confirm. (Cell writes come via a later step on top of "write".)
+    av?: {
+        read: (avId: string) => Promise<{columns: unknown[]; rows: unknown[]; viewType: string}>;
+    };
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -92,7 +99,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -436,6 +443,19 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             setAttr: (key: string, value: string) => {
                 blockEl?.setAttribute(key, value);
                 fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[key]: value}});
+            },
+        };
+    }],
+    ["av", ({ctx, blockId}) => {
+        ctx.av = {
+            read: async (avId: string) => {
+                if (!(await ensureGrant(blockId, "av", "read your databases"))) {
+                    throw new Error("av: denied by user");
+                }
+                const res = await fetchSyncPost("/api/av/renderAttributeView", {id: avId});
+                const view = (res?.data as {view?: {columns?: unknown[]; rows?: unknown[]}})?.view || {};
+                const viewType = (res?.data as {viewType?: string})?.viewType || "";
+                return {columns: view.columns || [], rows: view.rows || [], viewType};
             },
         };
     }],
