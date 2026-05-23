@@ -12,6 +12,7 @@ import {
     registerFeature, getFeature, listFeatures,
     registerProperty, getProperty, listProperties,
     listCapabilities,
+    allowApiEndpoint, allowWriteEndpoint, allowLibrary,
 } from "./runtime";
 import {applyFilter, applySort, applyGroup, applyManualOrder, applyView} from "./viewEngine";
 import {registerBuiltinFeatures} from "./builtinFeatures";
@@ -21,8 +22,9 @@ import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 import {parseNlDate, parseQuickAdd, extractTags, extractPriority} from "./nlDate";
 import {registerBlockDecorator, listBlockDecorators} from "./blockDecorators";
+import {getExportContent, listExports} from "./exportRegistry";
 
-export const SUPERBLOCK_API_VERSION = "0.3.0";
+export const SUPERBLOCK_API_VERSION = "0.5.0";
 
 // Idempotent: registers window.siyuan.superblock once, at app init (before
 // plugins load), so plugins can use it in their onload.
@@ -38,6 +40,11 @@ export const registerSuperBlockAPI = () => {
         registerCapability,
         registerFeature,
         registerProperty,
+        // allowlist contributions — a plugin may extend what blocks can reach
+        // (still behind the same per-capability user confirm + kill-switch).
+        allowApiEndpoint,
+        allowWriteEndpoint,
+        allowLibrary,
         // lifecycle
         on: onSuperBlockEvent,
         // introspection
@@ -51,6 +58,9 @@ export const registerSuperBlockAPI = () => {
         // block decorators — augment existing native blocks in place
         registerBlockDecorator,
         listBlockDecorators,
+        // export registry — read a block's declared static export content (ctx.onExport)
+        getExportContent,
+        listExports,
         // programmatic control
         insertSuperBlock,
         updateSuperBlock,

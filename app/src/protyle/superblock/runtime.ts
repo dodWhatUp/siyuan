@@ -27,9 +27,11 @@ import {parseEvery} from "./cron";
 import {matchHotkey} from "./hotkey";
 import {storagePath} from "./storage";
 import {registerBlockDecorator, BlockDecorator} from "./blockDecorators";
+import {addTopBar, addStatusBar, addSlashCommand, makeBlockMenuHandler, BlockMenuItem, SlashHost} from "./uiSurfaces";
+import {registerExport, clearExport} from "./exportRegistry";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -138,6 +140,31 @@ export interface SuperBlockCtx {
     // place: match(blockEl) → decorate(blockEl) (inject UI/behavior, read/write the
     // block). Applies to current + future blocks; auto-unregistered on unmount.
     decorate?: (def: BlockDecorator) => () => void;
+    // present with the "surfaces" capability. Add APP-LEVEL UI outside this block:
+    // a top-bar icon, a status-bar item, or a slash (/) command. Each returns an
+    // unregister fn and is auto-removed on unmount. (Docks/custom tabs need
+    // layout-init registration and are not addable at runtime.)
+    surfaces?: {
+        topBar: (o: {icon: string; title: string; position?: "left" | "right"; onclick: (e: MouseEvent) => void}) => () => void;
+        statusBar: (o: {html?: string; element?: HTMLElement; position?: "left" | "right"; onclick?: (e: MouseEvent) => void}) => () => void;
+        slashCommand: (o: {id: string; name: string; html?: string; run: (protyle: unknown, nodeElement: HTMLElement) => void}) => () => void;
+        // Add an item to the right-click (gutter) menu of EXISTING native blocks.
+        // `match(blockEl)` gates which blocks show it (default: all); `click` fires
+        // with the matched block element. Auto-removed on unmount.
+        blockMenu: (o: BlockMenuItem) => () => void;
+    };
+    // present with the "export" capability. Declare a STATIC representation the
+    // block contributes to copies/exports (instead of its live interactive output).
+    // The content is mirrored into the block's own <protyle-html data-content> on
+    // render. With {persist:true} it is ALSO saved to the block's custom-sb-export
+    // IAL attr (gated write) so it survives reload/sync and is API/SQL-legible.
+    // Returns an unregister fn; auto-cleared on unmount.
+    onExport?: (fn: () => string, opts?: {persist?: boolean}) => () => void;
+    // present with the "request" capability. Ask for a capability NOT in this
+    // block's preset; the user is prompted to grant it for this block. On grant the
+    // cap's provider runs against the live ctx (so ctx.<cap> becomes available) and
+    // resolves true; declined resolves false. Lets a small block escalate on demand.
+    requestCapability?: (name: Capability | string) => Promise<boolean>;
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -199,7 +226,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate", "surfaces", "export", "request"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -351,20 +378,25 @@ const newSyId = (): string => {
 // every entry in window.siyuan.plugins[].eventBus, so we register one minimal
 // pseudo-plugin (lazily, once) whose bus super-block code can subscribe to. The
 // extra fields are kept defined so code iterating plugins won't choke on it.
-let sbEventBus: EventBus | null = null;
-const ensureSbEventBus = (): EventBus | null => {
-    if (sbEventBus) { return sbEventBus; }
+// The shared pseudo-plugin object that lives in window.siyuan.plugins. SiYuan
+// iterates that array for event dispatch AND slash-command aggregation, so a single
+// minimal entry lets super-block code both subscribe to frontend events (its
+// eventBus) and register slash commands (its protyleSlash). Created lazily, once.
+let sbPlugin: (Record<string, unknown> & {eventBus: EventBus; protyleSlash: SlashHost["protyleSlash"]; name: string}) | null = null;
+const ensureSbPlugin = () => {
+    if (sbPlugin) { return sbPlugin; }
     const w = window.siyuan as unknown as {plugins?: Array<Record<string, unknown>>};
     if (!w.plugins) { w.plugins = []; }   // SiYuan leaves this undefined when no plugins are installed
-    sbEventBus = new EventBus("__superblock-events__");
-    w.plugins.push({
-        name: "__superblock-events__", eventBus: sbEventBus,
+    sbPlugin = {
+        name: "__superblock-events__", eventBus: new EventBus("__superblock-events__"),
         commands: [], models: {}, topBarIcons: [], statusBarIcons: [], docks: {},
         protyleSlash: [], protyleOptions: {}, setting: undefined, data: {},
         onload: () => undefined, onunload: () => undefined, onLayoutReady: () => undefined, uninstall: () => undefined,
-    });
-    return sbEventBus;
+    };
+    w.plugins.push(sbPlugin);
+    return sbPlugin;
 };
+const ensureSbEventBus = (): EventBus | null => ensureSbPlugin().eventBus;
 const getDisposables = (host: HTMLElement): HostDisposables => {
     let d = hostDisposables.get(host);
     if (!d) {
@@ -482,6 +514,15 @@ const WRITE_ALLOW = [
     "/api/block/appendBlock",
     "/api/block/prependBlock",
 ];
+
+// Plugin allowlist contributions (SPI step 5). A registered plugin may EXTEND what
+// blocks can reach: a read endpoint (ctx.api.post), a mutating endpoint (ctx.api.write
+// — still behind the per-block "write" confirm + audit, never deletes), or a CDN
+// library (ctx.require). Idempotent and additive only; nothing is removed at runtime,
+// and every reach still passes the same per-capability user gate + kill-switch.
+export const allowApiEndpoint = (path: string): void => { if (path && !API_ALLOW.includes(path)) { API_ALLOW.push(path); } };
+export const allowWriteEndpoint = (path: string): void => { if (path && !WRITE_ALLOW.includes(path)) { WRITE_ALLOW.push(path); } };
+export const allowLibrary = (name: string, spec: {url: string; global: string}): void => { if (name && spec && spec.url && spec.global) { LIB_ALLOW[name] = spec; } };
 
 // First-use confirm, now persisted (policy.ts → localStorage, per device). Once
 // the user allows `label` for `blockId` it is remembered across reloads. `label`
@@ -772,6 +813,61 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             const off = registerBlockDecorator(def);
             getDisposables(host).unmounts.push(off);
             return off;
+        };
+    }],
+    ["surfaces", ({ctx, host}) => {
+        const d = getDisposables(host);
+        const track = (off: () => void): (() => void) => { d.unmounts.push(off); return off; };
+        ctx.surfaces = {
+            topBar: (o) => track(addTopBar(o)),
+            statusBar: (o) => track(addStatusBar(o)),
+            slashCommand: (o) => track(addSlashCommand(ensureSbPlugin() as unknown as SlashHost, o)),
+            blockMenu: (o: BlockMenuItem) => {
+                const bus = ensureSbEventBus();
+                if (!bus) { return () => undefined; }
+                const handler = makeBlockMenuHandler(o);
+                bus.on("click-blockicon" as never, handler as never);
+                return track(() => bus.off("click-blockicon" as never, handler as never));
+            },
+        };
+    }],
+    ["export", ({ctx, blockId, host}) => {
+        ctx.onExport = (fn: () => string, opts?: {persist?: boolean}): (() => void) => {
+            registerExport(blockId, fn);
+            const content = () => { try { return fn() || ""; } catch { return ""; } };
+            // Mirror into the block's OWN <protyle-html data-content> so DOM-based
+            // copy/export reflect it. Safe: only touches this block's attribute.
+            try {
+                const stock = host.parentElement?.querySelector("protyle-html") as HTMLElement | null;
+                if (stock) { stock.setAttribute("data-content", content()); }
+            } catch { /* ignore — a faulty provider must not break render */ }
+            // Durable snapshot: persist to the block's OWN custom-sb-export IAL attr
+            // (same own-block, fire-and-forget pattern as ctx.state). It then survives
+            // reload/sync and is legible via the API + SQL. The render path restores it
+            // into data-content on mount. (Inlining into kernel *markdown* export still
+            // needs an export-path hook; this covers DOM/HTML/PDF export + round-trip.)
+            if (opts && opts.persist) {
+                try { fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {"custom-sb-export": content()}}); } catch { /* ignore */ }
+            }
+            const off = () => clearExport(blockId);
+            getDisposables(host).unmounts.push(off);
+            return off;
+        };
+    }],
+    ["request", ({ctx, blockId, host}) => {
+        // Runtime capability escalation (notes/10 G). A block asks for a cap not in
+        // its preset; on user grant, that cap's provider runs against THIS live ctx
+        // (so ctx.<cap> appears) and the grant is remembered per device. "compute"
+        // is the baseline (always available); unknown caps resolve false.
+        ctx.requestCapability = (name: string): Promise<boolean> => {
+            if (name === "compute") { return Promise.resolve(true); }
+            const provider = CAP_PROVIDERS.get(name);
+            if (!provider) { return Promise.resolve(false); }
+            return ensureGrant(blockId, "cap:" + name, "use the “" + name + "” capability").then((ok) => {
+                if (!ok) { return false; }
+                try { provider({ctx, blockId, host}); } catch (e) { console.warn("[superblock] requestCapability failed", name, e); return false; }
+                return true;
+            });
         };
     }],
     ["events", ({ctx, host}) => {

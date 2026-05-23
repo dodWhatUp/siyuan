@@ -19,6 +19,8 @@ import {parseEvery} from "./cron";
 import {matchHotkey} from "./hotkey";
 import {storageKey, storagePath} from "./storage";
 import {registerBlockDecorator} from "./blockDecorators";
+import {addTopBar, addStatusBar, addSlashCommand, makeBlockMenuHandler, SlashHost} from "./uiSurfaces";
+import {registerExport, getExportContent, clearExport, listExports} from "./exportRegistry";
 import {ReminderScheduler} from "./reminderScheduler";
 import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 
@@ -288,6 +290,60 @@ export async function run(): Promise<void> {
         ok("decorate.applies", probe.getAttribute("data-decorated") === "1" && decoCount === 1);
         offDeco();
         ok("decorate.unregister", !probe.hasAttribute("data-sbdec-test-deco"));
+
+        // ---- UI surfaces: top-bar / status-bar / slash command ----------
+        let barClicks = 0;
+        const offBar = addTopBar({icon: "iconStar", title: "SB Action", onclick: () => { barClicks++; }});
+        const barEl = document.querySelector('[data-sb-surface="topbar"]') as HTMLElement | null;
+        ok("surfaces.topbar.added", !!barEl && barEl.getAttribute("aria-label") === "SB Action");
+        barEl?.dispatchEvent(new Event("click"));
+        ok("surfaces.topbar.click", barClicks === 1);
+        offBar();
+        ok("surfaces.topbar.removed", !document.querySelector('[data-sb-surface="topbar"]'));
+
+        const offStatus = addStatusBar({html: "<span>hi</span>"});
+        ok("surfaces.statusbar.added", !!document.querySelector('[data-sb-surface="statusbar"]'));
+        offStatus();
+        ok("surfaces.statusbar.removed", !document.querySelector('[data-sb-surface="statusbar"]'));
+
+        const slashHost: SlashHost = {name: "test", protyleSlash: []};
+        let slashRan = 0;
+        const offSlash = addSlashCommand(slashHost, {id: "sb-demo", name: "SB Demo", run: () => { slashRan++; }});
+        ok("surfaces.slash.added", slashHost.protyleSlash.length === 1 && slashHost.protyleSlash[0].id === "sb-demo");
+        ok("surfaces.slash.filter", slashHost.protyleSlash[0].filter.includes("SB Demo"));
+        slashHost.protyleSlash[0].callback(null, document.createElement("div"));
+        ok("surfaces.slash.callback", slashRan === 1);
+        offSlash();
+        ok("surfaces.slash.removed", slashHost.protyleSlash.length === 0);
+
+        // ---- block context-menu item (makeBlockMenuHandler) -------------
+        const matchEl = document.createElement("div"); matchEl.setAttribute("data-type", "NodeParagraph");
+        const skipEl = document.createElement("div"); skipEl.setAttribute("data-type", "NodeHeading");
+        const added: string[] = []; let menuRan = 0; let clickedEl: HTMLElement | null = null;
+        const fakeMenu = {addItem: (o: {label: string; click: () => void}) => { added.push(o.label); o.click(); }};
+        const handler = makeBlockMenuHandler({
+            id: "para-only", label: "Do thing",
+            match: (b) => b.getAttribute("data-type") === "NodeParagraph",
+            click: (b) => { menuRan++; clickedEl = b; },
+        });
+        handler({detail: {menu: fakeMenu as never, blockElements: [skipEl, matchEl]}});
+        ok("blockmenu.matched", added.length === 1 && added[0] === "Do thing");
+        ok("blockmenu.click.target", menuRan === 1 && clickedEl === matchEl);
+        added.length = 0; menuRan = 0;
+        handler({detail: {menu: fakeMenu as never, blockElements: [skipEl]}});
+        ok("blockmenu.no-match", added.length === 0 && menuRan === 0);
+        handler({detail: {}});
+        ok("blockmenu.no-menu.safe", added.length === 0);
+
+        // ---- export registry: ctx.onExport backing ----------------------
+        registerExport("blk-1", () => "<b>snapshot</b>");
+        ok("export.get", getExportContent("blk-1") === "<b>snapshot</b>");
+        ok("export.list", listExports().includes("blk-1"));
+        registerExport("blk-throw", () => { throw new Error("boom"); });
+        ok("export.throws.safe", getExportContent("blk-throw") === undefined);
+        ok("export.missing", getExportContent("nope") === undefined);
+        clearExport("blk-1");
+        ok("export.clear", getExportContent("blk-1") === undefined);
     }
 
     // ---- search: full-text result mapping -------------------------------
