@@ -16,6 +16,7 @@ import {applyFilter, applySort, applyGroup, applyManualOrder, applyView} from ".
 import {registerBuiltinFeatures} from "./builtinFeatures";
 import {registerBuiltinProperties} from "./builtinProperties";
 import {parseRRule, expandOccurrences, upcomingFires, nextFire, collectDueFires} from "./reminderEngine";
+import {ReminderScheduler} from "./reminderScheduler";
 
 export const SUPERBLOCK_API_VERSION = "0.3.0";
 
@@ -51,7 +52,7 @@ export const registerSuperBlockAPI = () => {
         // shared view engine (notes/15) — filter/sort/group/order for data features
         view: {applyFilter, applySort, applyGroup, applyManualOrder, applyView},
         // reminder engine (notes/16) — repeat expansion + fire-time computation
-        reminder: {parseRRule, expandOccurrences, upcomingFires, nextFire, collectDueFires},
+        reminder: {parseRRule, expandOccurrences, upcomingFires, nextFire, collectDueFires, ReminderScheduler},
     };
     // Register the core built-in features (query, …) so they're available by default.
     registerBuiltinFeatures();
