@@ -6,7 +6,7 @@
 // DOM so the change takes effect immediately (no reload needed).
 
 import {Dialog} from "../../dialog";
-import {getPolicy, setPolicy, SuperBlockPolicy} from "./policy";
+import {getPolicy, setPolicy, SuperBlockPolicy, clearGrants} from "./policy";
 import {superblockRender, SB_MARKER} from "../render/superblockRender";
 import type {Capability} from "./runtime";
 
@@ -45,12 +45,28 @@ export const openSuperBlockSettings = () => {
             cap === "network" ? "Block code cannot make network requests." :
                 "Block code cannot read/write persisted state.",
         policy.disabled.includes(cap))).join("")}
+    <div class="fn__hr"></div>
+    <div class="fn__flex" style="align-items: center; padding: 8px 0">
+        <div class="fn__flex-1">
+            <div>Remembered permissions</div>
+            <div class="ft__smaller ft__on-surface">api / network grants you've allowed per block (this device).</div>
+        </div>
+        <div class="fn__space"></div>
+        <button class="b3-button b3-button--outline" id="sbClearGrants">Clear</button>
+    </div>
 </div>
 <div class="b3-dialog__action">
     <button class="b3-button b3-button--cancel">Cancel</button>
     <div class="fn__space"></div>
     <button class="b3-button b3-button--text">Save</button>
 </div>`,
+    });
+
+    const clearBtn = dialog.element.querySelector("#sbClearGrants") as HTMLButtonElement;
+    clearBtn.addEventListener("click", () => {
+        clearGrants();
+        clearBtn.textContent = "Cleared";
+        clearBtn.disabled = true;
     });
 
     const buttons = dialog.element.querySelectorAll(".b3-dialog__action .b3-button");

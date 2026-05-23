@@ -52,3 +52,38 @@ export const effectiveCaps = (caps: Capability[]): Capability[] => {
     const disabled = getPolicy().disabled;
     return caps.filter((c) => !disabled.includes(c));
 };
+
+// --- Persisted permission grants -------------------------------------------
+// Remembered api/network grants, so the first-use confirm is truly one-time.
+// Stored in localStorage (per-DEVICE, not synced) keyed by blockId → labels.
+// Network grants are per-domain ("network:<host>"), which doubles as the domain
+// allowlist. Device-local on purpose: a synced/imported block re-prompts on
+// another device rather than inheriting trust.
+const GRANTS_KEY = "sb-grants";
+type GrantStore = Record<string, string[]>;
+
+const getGrantStore = (): GrantStore => {
+    try {
+        const raw = localStorage.getItem(GRANTS_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch {
+        return {};
+    }
+};
+
+export const hasGrant = (blockId: string, label: string): boolean => {
+    const list = getGrantStore()[blockId];
+    return !!list && list.includes(label);
+};
+
+export const addGrant = (blockId: string, label: string) => {
+    const store = getGrantStore();
+    const list = store[blockId] || [];
+    if (!list.includes(label)) {
+        list.push(label);
+    }
+    store[blockId] = list;
+    localStorage.setItem(GRANTS_KEY, JSON.stringify(store));
+};
+
+export const clearGrants = () => localStorage.removeItem(GRANTS_KEY);

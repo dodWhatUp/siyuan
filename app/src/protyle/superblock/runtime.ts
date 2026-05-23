@@ -10,7 +10,7 @@
 
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {confirmDialog} from "../../dialog/confirmDialog";
-import {effectiveCaps, isKilled} from "./policy";
+import {effectiveCaps, isKilled, hasGrant, addGrant} from "./policy";
 import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
 
@@ -88,30 +88,20 @@ const API_ALLOW = [
     "/api/attr/getBlockAttrs",
 ];
 
-// Session-scoped capability grants, keyed by blockId. Cleared on reload (so a
-// synced/imported block re-prompts). Persisting grants to an IAL is a later step.
-const grants = new Map<string, Set<Capability>>();
-
-// First-use confirm. Resolves true once the user allows `cap` for `blockId`
-// (remembered for the session); false if they cancel.
-const ensureGrant = (blockId: string, cap: Capability): Promise<boolean> => {
-    const have = grants.get(blockId);
-    if (have && have.has(cap)) {
+// First-use confirm, now persisted (policy.ts → localStorage, per device). Once
+// the user allows `label` for `blockId` it is remembered across reloads. `label`
+// is "api" or "network:<host>" (per-domain → doubles as the network allowlist).
+const ensureGrant = (blockId: string, label: string, desc: string): Promise<boolean> => {
+    if (hasGrant(blockId, label)) {
         return Promise.resolve(true);
     }
     return new Promise((resolve) => {
         confirmDialog(
-            `Super-block — allow "${cap}"?`,
-            `Block …${blockId.slice(-6)} is requesting the <b>${cap}</b> capability ` +
-            `(${cap === "api" ? "read from the SiYuan kernel" : "make network requests"}). ` +
-            `Allow for this session?`,
+            `Super-block — allow ${label}?`,
+            `Block …${blockId.slice(-6)} wants to <b>${desc}</b>. ` +
+            `Allow? (remembered on this device)`,
             () => {
-                let set = grants.get(blockId);
-                if (!set) {
-                    set = new Set();
-                    grants.set(blockId, set);
-                }
-                set.add(cap);
+                addGrant(blockId, label);
                 resolve(true);
             },
             () => resolve(false),
@@ -154,7 +144,7 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                 if (!API_ALLOW.includes(path)) {
                     throw new Error(`api: endpoint not allowed (${path})`);
                 }
-                if (!(await ensureGrant(blockId, "api"))) {
+                if (!(await ensureGrant(blockId, "api", "read from the SiYuan kernel"))) {
                     throw new Error("api: denied by user");
                 }
                 return fetchSyncPost(path, body || {});
@@ -163,7 +153,18 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
     }
     if (caps.includes("network")) {
         ctx.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-            if (!(await ensureGrant(blockId, "network"))) {
+            // Per-domain grant: the host the block wants to reach is what's
+            // confirmed and remembered, so each new domain re-prompts.
+            const rawUrl = typeof input === "string" ? input
+                : input instanceof URL ? input.href
+                    : (input as Request).url;
+            let host: string;
+            try {
+                host = new URL(rawUrl, location.href).host;
+            } catch {
+                throw new Error("network: invalid URL");
+            }
+            if (!(await ensureGrant(blockId, `network:${host}`, `fetch from ${host}`))) {
                 throw new Error("network: denied by user");
             }
             return fetch(input, init);
