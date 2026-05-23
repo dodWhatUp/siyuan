@@ -171,6 +171,10 @@ export interface SuperBlockCtx {
         // Write one cell (e.g. a date) back to the database. `data` is the typed
         // cell-value object for that column type. Gated by the write confirm.
         setCell: (op: {avID: string; rowID: string; keyID: string; cellID: string; data: unknown}) => Promise<IWebSocketData>;
+        // Add a column (key) to a database; returns the new key id. Gated by write.
+        addColumn: (op: {avID: string; name?: string; type?: string; previousID?: string}) => Promise<string>;
+        // Escape hatch: run ANY kernel transaction (add rows/views, etc.). Gated by write.
+        tx: (doOperations: Array<Record<string, unknown>>) => Promise<IWebSocketData>;
     };
     // present in FEATURE mode: the block's parsed, validated config (from
     // custom-sb-config merged over the feature's defaultConfig). Lets a feature's
@@ -330,6 +334,13 @@ const hostDisposables = new WeakMap<HTMLElement, HostDisposables>();
 const hostSignatures = new WeakMap<HTMLElement, string>();
 // In-doc pub/sub channels for ctx.channel — name -> subscriber callbacks.
 const channelBus = new Map<string, Set<(data: unknown) => void>>();
+
+// Generate a SiYuan-format id (YYYYMMDDHHmmss-<7 base36>) without depending on Lute.
+const newSyId = (): string => {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${Math.random().toString(36).slice(2, 9)}`;
+};
 
 // Shared EventBus for the "events" capability. SiYuan emits frontend events to
 // every entry in window.siyuan.plugins[].eventBus, so we register one minimal
@@ -890,6 +901,28 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                         undoOperations: [],
                     }],
                 });
+            },
+            addColumn: async (op) => {
+                if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
+                    throw new Error("write: denied by user");
+                }
+                const id = newSyId();
+                emit("write", {blockId, detail: {addColumn: op.avID}});
+                await fetchSyncPost("/api/transactions", {
+                    reqId: Date.now(),
+                    transactions: [{
+                        doOperations: [{action: "addAttrViewCol", avID: op.avID, name: op.name || "New Column", type: op.type || "text", id, previousID: op.previousID || ""}],
+                        undoOperations: [],
+                    }],
+                });
+                return id;
+            },
+            tx: async (doOperations) => {
+                if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
+                    throw new Error("write: denied by user");
+                }
+                emit("write", {blockId, detail: {tx: doOperations.length}});
+                return fetchSyncPost("/api/transactions", {reqId: Date.now(), transactions: [{doOperations, undoOperations: []}]});
             },
         };
     }],
