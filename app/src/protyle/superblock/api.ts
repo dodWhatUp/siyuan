@@ -11,6 +11,7 @@ import {
     insertSuperBlock, updateSuperBlock, getSuperBlockState, setSuperBlockState, rerenderSuperBlock,
     registerFeature, getFeature, listFeatures,
 } from "./runtime";
+import {applyFilter, applySort, applyGroup, applyManualOrder, applyView} from "./viewEngine";
 
 export const SUPERBLOCK_API_VERSION = "0.2.0";
 
@@ -40,5 +41,7 @@ export const registerSuperBlockAPI = () => {
         getState: getSuperBlockState,
         setState: setSuperBlockState,
         rerender: rerenderSuperBlock,
+        // shared view engine (notes/15) — filter/sort/group/order for data features
+        view: {applyFilter, applySort, applyGroup, applyManualOrder, applyView},
     };
 };
