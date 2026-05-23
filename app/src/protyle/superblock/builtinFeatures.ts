@@ -193,6 +193,47 @@ const openReminderEditor = (
     document.body.appendChild(pop);
 };
 
+// Edit a Location cell (the text cell holds the value directly) via the "location"
+// property component; writes the serialized JSON back to the same cell.
+const openLocationEditor = (
+    anchorEl: HTMLElement, raw: string, avId: string, rowId: string, keyId: string,
+    cellId: string, cellVal: AvCellValue | null, ctx: SuperBlockCtx, rerender: () => void,
+) => {
+    const prop = getProperty("location");
+    if (!prop || !prop.edit) { return; }
+    const meta = prop.parse ? prop.parse(raw) : null;
+    const pop = document.createElement("div");
+    pop.style.cssText = "position:fixed;z-index:999;background:var(--b3-menu-background);border:1px solid var(--b3-border-color);border-radius:6px;padding:10px;box-shadow:var(--b3-dialog-shadow);min-width:240px";
+    const r = anchorEl.getBoundingClientRect();
+    pop.style.left = Math.min(r.left, window.innerWidth - 260) + "px";
+    pop.style.top = (r.bottom + 4) + "px";
+    pop.appendChild(prop.edit(null, meta));
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;gap:6px;margin-top:8px;justify-content:flex-end";
+    const cancel = document.createElement("button");
+    cancel.className = "b3-button b3-button--cancel";
+    cancel.textContent = "Cancel";
+    const save = document.createElement("button");
+    save.className = "b3-button b3-button--text";
+    save.textContent = "Save";
+    const close = () => pop.remove();
+    cancel.onclick = close;
+    save.onclick = () => {
+        const newMeta = (pop.firstChild as unknown as {getMeta?: () => unknown}).getMeta?.();
+        if (!newMeta) { save.textContent = "bad coords"; return; }
+        const out = prop.serialize ? prop.serialize(newMeta) : "";
+        const data = cellVal ? JSON.parse(JSON.stringify(cellVal)) as AvCellValue : {} as AvCellValue;
+        data.type = "text";
+        (data as {text?: {content: string}}).text = {content: out};
+        ctx.av!.setCell({avID: avId, rowID: rowId, keyID: keyId, cellID: cellId, data})
+            .then(() => { close(); rerender(); })
+            .catch((e: Error) => { save.textContent = "ERR: " + e.message; });
+    };
+    bar.append(cancel, save);
+    pop.appendChild(bar);
+    document.body.appendChild(pop);
+};
+
 // Build a task chip: drag-to-reschedule + (when reminderKey is set) a reminder
 // affordance that opens the editor popover. Shared by month + range grids.
 const makeChip = (
@@ -443,7 +484,68 @@ const calendarRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     ctx.watch?.(render);
 };
 
-// Database multi-view: a runtime view switcher (table / calendar) over one
+// Board view: group rows into columns by a chosen column's value (Trello/Kanban
+// style). Cards show the row title. When the group column is text, dragging a card
+// to another column writes that column's value back via ctx.av.setCell.
+const renderBoard = (
+    container: HTMLElement, columns: Array<{id: string; name: string; type: string}>, rows: AvRow[],
+    avId: string, groupKey: string, ctx: SuperBlockCtx, rerender: () => void,
+) => {
+    const groupCol = columns.find((c) => c.id === groupKey);
+    const groupType = groupCol ? groupCol.type : "";
+    const groups: Record<string, AvRow[]> = {};
+    const order: string[] = [];
+    rows.forEach((r) => {
+        const gc = r.cells.find((c) => c.value && c.value.keyID === groupKey);
+        const key = (gc && avCellText(gc.value)) || "(empty)";
+        if (!groups[key]) { groups[key] = []; order.push(key); }
+        groups[key].push(r);
+    });
+    let dragRow: string | null = null;
+    let dragCellId = "";
+    let dragVal: AvCellValue | null = null;
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;gap:8px;align-items:flex-start;overflow-x:auto";
+    order.forEach((key) => {
+        const colEl = document.createElement("div");
+        colEl.style.cssText = "min-width:140px;flex:0 0 auto;border:1px solid var(--b3-border-color);border-radius:6px;padding:4px";
+        const hd = document.createElement("div");
+        hd.textContent = `${key}  (${groups[key].length})`;
+        hd.style.cssText = "font-weight:bold;font-size:11px;margin-bottom:4px";
+        colEl.appendChild(hd);
+        if (groupType === "text") {
+            colEl.ondragover = (e) => { e.preventDefault(); colEl.style.background = "var(--b3-theme-primary-lightest)"; };
+            colEl.ondragleave = () => { colEl.style.background = ""; };
+            colEl.ondrop = (e) => {
+                e.preventDefault();
+                colEl.style.background = "";
+                if (!dragRow) { return; }
+                const nd = dragVal ? JSON.parse(JSON.stringify(dragVal)) as AvCellValue : {} as AvCellValue;
+                nd.type = "text";
+                (nd as {text?: {content: string}}).text = {content: key === "(empty)" ? "" : key};
+                ctx.av!.setCell({avID: avId, rowID: dragRow, keyID: groupKey, cellID: dragCellId, data: nd}).then(rerender);
+                dragRow = null;
+            };
+        }
+        groups[key].forEach((r) => {
+            const tc = r.cells.find((c) => c.value && c.value.type === "block");
+            const card = document.createElement("div");
+            card.textContent = (tc && tc.value.block && tc.value.block.content) || "(row)";
+            card.style.cssText = "background:var(--b3-theme-background);border:1px solid var(--b3-border-color);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:11px";
+            if (groupType === "text") {
+                card.draggable = true;
+                card.style.cursor = "grab";
+                const gc = r.cells.find((c) => c.value && c.value.keyID === groupKey);
+                card.ondragstart = () => { dragRow = r.id; dragCellId = gc ? gc.id : ""; dragVal = gc ? gc.value : null; };
+            }
+            colEl.appendChild(card);
+        });
+        wrap.appendChild(colEl);
+    });
+    container.appendChild(wrap);
+};
+
+// Database multi-view: a runtime view switcher (table / calendar / board) over one
 // database, reusing the shared month grid. The "change view" feature.
 const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const el = ctx.el as HTMLElement;
@@ -455,6 +557,8 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     }
     let active = String(cfg.view || "table");
     const reminderKey = String(cfg.reminderCol || "") || undefined;
+    const locationKey = String(cfg.locationCol || "") || undefined;
+    const groupKey = String(cfg.groupCol || "") || undefined;
     if (reminderKey && dateKey) { startReminderScheduler(ctx, avId, dateKey, reminderKey); }
     const calState: CalState = {mode: String(cfg.calView || "month"), days: Number(cfg.days || 3), anchor: 0};
     const render = () => {
@@ -464,7 +568,7 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
             el.innerHTML = "";
             const bar = document.createElement("div");
             bar.style.cssText = "display:flex;gap:6px;margin-bottom:6px";
-            ["table", "calendar"].forEach((vname) => {
+            ["table", "calendar", "board"].forEach((vname) => {
                 const btn = document.createElement("button");
                 btn.textContent = vname;
                 btn.className = "b3-button " + (vname === active ? "b3-button--text" : "b3-button--outline");
@@ -478,6 +582,11 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
                 if (!dateKey) { body.textContent = "Calendar view needs a date column (set it in settings)."; return; }
                 renderCalendar(body, buildCalItems(rows, dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey,
                     () => downloadText("tasks.ics", icsFromRows(rows as Parameters<typeof icsFromRows>[0], dateKey, reminderKey, "SiYuan Tasks")));
+                return;
+            }
+            if (active === "board") {
+                if (!groupKey) { body.textContent = "Board view needs a group column (set it in settings)."; return; }
+                renderBoard(body, columns, rows, avId, groupKey, ctx, render);
                 return;
             }
             const table = document.createElement("table");
@@ -495,8 +604,18 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
                 columns.forEach((c) => {
                     const cellEl = r.cells.find((cc) => cc.value && cc.value.keyID === c.id);
                     const td = document.createElement("td");
-                    td.textContent = cellEl ? avCellText(cellEl.value) : "";
                     td.style.cssText = "border:1px solid var(--b3-border-color);padding:2px 6px";
+                    if (locationKey && c.id === locationKey) {
+                        const prop = getProperty("location");
+                        const raw = (cellEl && (cellEl.value as {text?: {content?: string}}).text?.content) || "";
+                        const meta = prop && prop.parse ? prop.parse(raw) : null;
+                        const view = prop && prop.render ? prop.render(cellEl ? cellEl.value : null, meta) : document.createElement("span");
+                        view.style.cursor = "pointer";
+                        view.onclick = () => openLocationEditor(td, raw, avId, r.id, locationKey, cellEl ? cellEl.id : "", cellEl ? cellEl.value : null, ctx, render);
+                        td.appendChild(view);
+                    } else {
+                        td.textContent = cellEl ? avCellText(cellEl.value) : "";
+                    }
                     tr.appendChild(td);
                 });
                 table.appendChild(tr);
@@ -530,7 +649,9 @@ export const registerBuiltinFeatures = () => {
             {key: "db", label: "Database", type: "av-database"},
             {key: "dateCol", label: "Date column (for calendar view)", type: "av-column", ofKey: "db"},
             {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
-            {key: "view", label: "Default view", type: "select", options: [{value: "table", label: "Table"}, {value: "calendar", label: "Calendar"}]},
+            {key: "locationCol", label: "Location column (text)", type: "av-column", ofKey: "db"},
+            {key: "groupCol", label: "Group column (for board view)", type: "av-column", ofKey: "db"},
+            {key: "view", label: "Default view", type: "select", options: [{value: "table", label: "Table"}, {value: "calendar", label: "Calendar"}, {value: "board", label: "Board"}]},
             {key: "calView", label: "Calendar sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
             {key: "days", label: "Days (for N-days view)", type: "number"},
         ],

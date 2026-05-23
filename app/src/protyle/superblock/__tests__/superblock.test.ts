@@ -1,0 +1,168 @@
+// Regression tests for the super-block feature/property/reminder stack.
+// Pure-logic + jsdom DOM-integration assertions. Run via ./run.mjs (which bundles
+// these against a stubbed runtime + jsdom). Exits non-zero on any failure.
+//
+// Covered: RRULE engine, reminder + location property parse/serialize, .ics export,
+// reminder scheduler dedupe, and DOM integration (calendar chip → reminder write,
+// database table location cell → write, board view group + drag-write).
+
+import {__features} from "./runtime";
+import {registerBuiltinFeatures} from "./builtinFeatures";
+import {
+    registerBuiltinProperties, offsetToMinutes,
+    parseLocationString, parseLocationMeta, serializeLocationMeta,
+} from "./builtinProperties";
+import {parseRRule, expandOccurrences, upcomingFires, collectDueFires} from "./reminderEngine";
+import {ReminderScheduler} from "./reminderScheduler";
+import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
+
+let pass = 0;
+const fails: string[] = [];
+const eq = (name: string, got: unknown, exp: unknown) => {
+    const a = JSON.stringify(got);
+    const b = JSON.stringify(exp);
+    if (a === b) { pass++; } else { fails.push(`${name}\n    expected ${b}\n    got      ${a}`); }
+};
+const ok = (name: string, cond: boolean) => { if (cond) { pass++; } else { fails.push(name); } };
+
+const D = (y: number, m: number, d: number, h: number, mi = 0) => new Date(y, m, d, h, mi, 0).getTime();
+const iso = (s: number) => new Date(s).toISOString().slice(0, 16);
+const tick = () => new Promise((r) => setTimeout(r, 30));
+
+export async function run(): Promise<void> {
+    registerBuiltinProperties();
+    registerBuiltinFeatures();
+
+    // ---- reminder engine -------------------------------------------------
+    const base = D(2026, 5, 1, 9);
+    eq("rrule.daily.count3", expandOccurrences(base, parseRRule("FREQ=DAILY;COUNT=3"), base, base + 30 * 864e5).map(iso),
+        ["2026-06-01T09:00", "2026-06-02T09:00", "2026-06-03T09:00"]);
+    eq("rrule.weekly.byday", expandOccurrences(base, parseRRule("FREQ=WEEKLY;BYDAY=MO,WE"), base, base + 14 * 864e5).map(iso),
+        ["2026-06-01T09:00", "2026-06-03T09:00", "2026-06-08T09:00", "2026-06-10T09:00", "2026-06-15T09:00"]);
+    eq("rrule.until.guard", expandOccurrences(base, parseRRule("FREQ=DAILY;UNTIL=20260604"), base, base + 30 * 864e5).map(iso),
+        ["2026-06-01T09:00", "2026-06-02T09:00", "2026-06-03T09:00", "2026-06-04T09:00"]);
+    eq("fires.relative.weekly", upcomingFires(base, {relative: ["-15m"], rrule: "FREQ=WEEKLY"}, base - 864e5, base + 8 * 864e5).map(iso),
+        ["2026-06-01T08:45", "2026-06-08T08:45"]);
+    eq("fires.absolute.only", upcomingFires(base, {remindAt: [base + 36e5]}, base, base + 864e5).map(iso),
+        ["2026-06-01T10:00"]);
+
+    // collectDueFires skips rows without a reminder cell
+    const dueRows = [
+        {id: "A", cells: [
+            {id: "a1", value: {type: "block", keyID: "kb", block: {content: "A"}}},
+            {id: "a2", value: {type: "date", keyID: "kd", date: {content: base, isNotEmpty: true}}},
+            {id: "a3", value: {type: "text", keyID: "kr", text: {content: '{"_type":"reminder","relative":["-15m"]}'}}},
+        ]},
+        {id: "B", cells: [
+            {id: "b1", value: {type: "block", keyID: "kb", block: {content: "B"}}},
+            {id: "b2", value: {type: "date", keyID: "kd", date: {content: base, isNotEmpty: true}}},
+        ]},
+    ];
+    eq("collectDueFires", collectDueFires(dueRows, "kd", "kr", base - 864e5, base + 864e5).map((f) => `${iso(f.fireTs)} ${f.title}`),
+        ["2026-06-01T08:45 A"]);
+
+    // ---- reminder property ----------------------------------------------
+    eq("offsetToMinutes", [offsetToMinutes("-15m"), offsetToMinutes("-1d 2h"), offsetToMinutes("30m"), offsetToMinutes("x")],
+        [-15, -1560, 30, null]);
+
+    // ---- location property ----------------------------------------------
+    eq("loc.bare", parseLocationString("48.8584,2.2945"), {lat: 48.8584, lng: 2.2945});
+    eq("loc.named", parseLocationString("Eiffel | 48.8584, 2.2945"), {name: "Eiffel", lat: 48.8584, lng: 2.2945});
+    eq("loc.at", parseLocationString("Cafe @ 40.7,-74.0"), {name: "Cafe", lat: 40.7, lng: -74});
+    eq("loc.reject.range", parseLocationString("200,500"), null);
+    eq("loc.reject.garbage", parseLocationString("hello"), null);
+    const locMeta = parseLocationMeta("Eiffel | 48.8584,2.2945")!;
+    const locSer = serializeLocationMeta(locMeta);
+    ok("loc.serialize.schema", locSer.indexOf('"$schema":"siyuan-superblock/location@1"') >= 0 && locSer.indexOf('"lat":48.8584') >= 0);
+    eq("loc.roundtrip.lat", parseLocationMeta(locSer)!.lat, 48.8584);
+
+    // ---- .ics export -----------------------------------------------------
+    eq("ics.trigger", [minutesToTrigger(-15), minutesToTrigger(-1440), minutesToTrigger(-90), minutesToTrigger(0)],
+        ["-PT15M", "-P1D", "-PT1H30M", "PT0M"]);
+    const ics = buildICS([{uid: "u1@x", title: "Stand; up", start: Date.UTC(2026, 5, 1, 9), meta: {relative: ["-15m"], rrule: "FREQ=WEEKLY"}}]);
+    ok("ics.vcalendar", ics.indexOf("BEGIN:VCALENDAR") === 0 && ics.indexOf("END:VCALENDAR") > 0);
+    ok("ics.rrule", ics.indexOf("RRULE:FREQ=WEEKLY") >= 0);
+    ok("ics.valarm", ics.indexOf("BEGIN:VALARM") >= 0 && ics.indexOf("TRIGGER:-PT15M") >= 0);
+    ok("ics.escape", ics.indexOf("SUMMARY:Stand\\; up") >= 0);
+    ok("ics.fromRows", icsFromRows([{id: "r", cells: [
+        {value: {type: "block", keyID: "kb", block: {content: "T"}}},
+        {value: {type: "date", keyID: "kd", date: {content: Date.now(), isNotEmpty: true}}},
+    ]}], "kd").indexOf("SUMMARY:T") >= 0);
+
+    // ---- reminder scheduler dedupe --------------------------------------
+    let clock = D(2026, 5, 1, 8, 44);
+    const notified: string[] = [];
+    const sched = new ReminderScheduler({
+        getSources: () => [{avID: "AV1", dateCol: "kd", reminderCol: "kr"}],
+        read: async () => ({rows: [
+            {id: "A", cells: [
+                {id: "a1", value: {type: "block", keyID: "kb", block: {content: "Rent"}}},
+                {id: "a2", value: {type: "date", keyID: "kd", date: {content: D(2026, 5, 1, 9), isNotEmpty: true}}},
+                {id: "a3", value: {type: "text", keyID: "kr", text: {content: '{"_type":"reminder","relative":["-15m"]}'}}},
+            ]},
+        ]}),
+        now: () => clock,
+        notify: (f) => notified.push(iso(f.fireTs) + " " + f.title),
+    });
+    clock = D(2026, 5, 1, 8, 46); await sched.tick();
+    clock = D(2026, 5, 1, 8, 50); await sched.tick();
+    clock = D(2026, 5, 1, 9, 1); await sched.tick();
+    await sched.tick();
+    eq("scheduler.dedupe", notified, ["2026-06-01T08:45 Rent"]);
+
+    // ---- DOM integration (jsdom) ----------------------------------------
+    if (typeof document !== "undefined") {
+        // reminder render summary
+        const rp = (await import("./runtime")).getProperty("reminder")!;
+        eq("reminder.render", rp.render!(null, {relative: ["-15m"], rrule: "FREQ=WEEKLY"}).textContent, "🔔 15m before, weekly");
+
+        // calendar chip → reminder editor → companion write
+        const calRows = [{id: "row1", cells: [
+            {id: "c_b", value: {type: "block", keyID: "kb", block: {content: "Task A"}}},
+            {id: "c_d", value: {type: "date", keyID: "kd", date: {content: D(2026, 5, 1, 9), isNotEmpty: true}}},
+            {id: "c_r", value: {type: "text", keyID: "kr", text: {content: '{"_type":"reminder","relative":["-15m"]}'}}},
+        ]}];
+        const calSet: Array<Record<string, unknown>> = [];
+        const calCtx = {
+            el: document.createElement("div"),
+            av: {read: async () => ({columns: [], rows: calRows}), setCell: async (p: Record<string, unknown>) => { calSet.push(p); return {}; }},
+            watch: () => {}, onUnmount: () => {},
+        };
+        __features.get("calendar")!.run(calCtx, {db: "AV1", dateCol: "kd", reminderCol: "kr", view: "month"});
+        await tick();
+        const bell = Array.from(calCtx.el.querySelectorAll("span")).find((s) => (s as HTMLElement).title === "Edit reminder") as HTMLElement;
+        ok("cal.chip.bell", !!bell);
+        (bell as unknown as {onclick: (e: {stopPropagation: () => void}) => void}).onclick({stopPropagation() {}});
+        const save = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Save") as HTMLElement;
+        (save as unknown as {onclick: () => void}).onclick();
+        await tick();
+        ok("cal.reminder.write", calSet.length === 1 && calSet[0].keyID === "kr" && calSet[0].cellID === "c_r");
+
+        // database board: group + render + drag-write
+        const boardCols = [{id: "kb", name: "Title", type: "block"}, {id: "ks", name: "Status", type: "text"}];
+        const boardRows = [
+            {id: "r1", cells: [{id: "b1", value: {type: "block", keyID: "kb", block: {content: "X"}}}, {id: "s1", value: {type: "text", keyID: "ks", text: {content: "Todo"}}}]},
+            {id: "r2", cells: [{id: "b2", value: {type: "block", keyID: "kb", block: {content: "Y"}}}, {id: "s2", value: {type: "text", keyID: "ks", text: {content: "Doing"}}}]},
+        ];
+        const boardSet: Array<Record<string, unknown>> = [];
+        const boardCtx = {
+            el: document.createElement("div"),
+            av: {read: async () => ({columns: boardCols, rows: boardRows}), setCell: async (p: Record<string, unknown>) => { boardSet.push(p); return {}; }},
+            watch: () => {}, onUnmount: () => {},
+        };
+        __features.get("database")!.run(boardCtx, {db: "AV1", groupCol: "ks", view: "board"});
+        await tick();
+        const colDivs = Array.from(boardCtx.el.querySelectorAll("div")).filter((d) => /\(\d+\)/.test((d.firstChild && (d.firstChild as HTMLElement).textContent) || ""));
+        ok("board.columns", colDivs.length === 2);
+    }
+
+    // ---- summary ---------------------------------------------------------
+    const total = pass + fails.length;
+    if (fails.length) {
+        console.log(`\nFAILED ${fails.length}/${total}:`);
+        fails.forEach((f) => console.log("  ✗ " + f));
+        (globalThis as unknown as {process: {exitCode: number}}).process.exitCode = 1;
+    } else {
+        console.log(`\n✓ all ${total} super-block assertions passed`);
+    }
+}
