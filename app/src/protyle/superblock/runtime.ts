@@ -416,6 +416,10 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
     }],
 ]);
 
+// Register a plugin-provided capability (notes/09 SPI). The provider augments
+// ctx for any preset that lists `name`; it stays behind the same user gates.
+export const registerCapability = (name: string, provider: CapProvider) => CAP_PROVIDERS.set(name, provider);
+
 // Build the gated ctx by running each enabled capability's provider. "compute"
 // has no provider (it's the baseline). Unknown caps are skipped. This loop is the
 // single extension point the plugin SPI will hook (notes/09).

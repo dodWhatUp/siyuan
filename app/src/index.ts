@@ -5,6 +5,7 @@ import {onGetConfig} from "./boot/onGetConfig";
 import {initBlockPopover} from "./block/popover";
 import {account} from "./config/account";
 import {addScript, addScriptSync} from "./protyle/util/addScript";
+import {registerSuperBlockAPI} from "./protyle/superblock/api";
 import {genUUID} from "./util/genID";
 import {fetchGet, fetchPost} from "./util/fetch";
 import {addBaseURL, getIdFromSYProtocol, isSYProtocol, redirectToCheckAuth, setNoteBook} from "./util/pathName";
@@ -217,6 +218,8 @@ export class App {
                 }
             }),
         };
+        // Expose the super-block API before plugins load so they can use it.
+        registerSuperBlockAPI();
 
         fetchPost("/api/system/getConf", {}, async (response) => {
             addScriptSync(`${Constants.PROTYLE_CDN}/js/lute/lute.min.js?v=${Constants.SIYUAN_VERSION}`, "protyleLuteScript");
