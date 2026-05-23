@@ -122,6 +122,12 @@ export const superblockRender = (element: Element) => {
             host.className = "sb-host";
             host.setAttribute("contenteditable", "false");
             wrapper.insertBefore(host, wrapper.firstChild);
+        } else {
+            // Re-render (e.g. after editing the code in the pencil): drop the previous
+            // output so the new run starts on a clean host. Otherwise stale content
+            // lingers when the new code doesn't write to ctx.el (e.g. it only shows a
+            // toast), which looks like "my new code didn't render".
+            host.innerHTML = "";
         }
         // Defer running the block until it scrolls near the viewport. `config`
         // (custom-sb-config) drives FEATURE mode; `code` drives raw-code mode.
