@@ -2,7 +2,7 @@
 // registered at init so they're usable out of the box and survive reload; plugins
 // add more via window.siyuan.superblock.registerFeature. Each is config-driven.
 
-import {registerFeature, SuperBlockCtx} from "./runtime";
+import {registerFeature, SuperBlockCtx, getProperty} from "./runtime";
 import {applyView, ViewRecord, ViewConfig} from "./viewEngine";
 
 // Query / Search: config = a SQL query + view (filter/sort/group) + table|list mode.
@@ -72,10 +72,14 @@ type AvCellValue = {
     date?: {content: number; isNotEmpty: boolean; [k: string]: unknown};
 };
 type AvRow = {id: string; cells: Array<{id: string; value: AvCellValue}>};
-type CalItem = {title: string; ts: number; rowId: string; cellId: string; val: AvCellValue};
+type CalItem = {
+    title: string; ts: number; rowId: string; cellId: string; val: AvCellValue;
+    reminderCellId?: string; reminderRaw?: string; reminderVal?: AvCellValue;   // companion reminder cell (P7)
+};
 
 // Build calendar items (title + timestamp + cell ref) from a database's rows.
-const buildCalItems = (rows: AvRow[], dateKey: string): CalItem[] => {
+// If reminderKey is given, also capture the row's reminder companion cell.
+const buildCalItems = (rows: AvRow[], dateKey: string, reminderKey?: string): CalItem[] => {
     const items: CalItem[] = [];
     rows.forEach((r) => {
         const tc = r.cells.find((c) => c.value && c.value.type === "block");
@@ -83,7 +87,16 @@ const buildCalItems = (rows: AvRow[], dateKey: string): CalItem[] => {
         const title = (tc && tc.value.block && tc.value.block.content) || "(task)";
         const ts = (dc && dc.value.date && dc.value.date.isNotEmpty) ? dc.value.date.content : null;
         if (ts && dc) {
-            items.push({title, ts, rowId: r.id, cellId: dc.id, val: dc.value});
+            const item: CalItem = {title, ts, rowId: r.id, cellId: dc.id, val: dc.value};
+            if (reminderKey) {
+                const rc = r.cells.find((c) => c.value && c.value.keyID === reminderKey);
+                if (rc) {
+                    item.reminderCellId = rc.id;
+                    item.reminderVal = rc.value;
+                    item.reminderRaw = (rc.value as {text?: {content?: string}}).text?.content || "";
+                }
+            }
+            items.push(item);
         }
     });
     return items;
@@ -106,11 +119,80 @@ const avCellText = (v: AvCellValue | undefined): string => {
     }
 };
 
+// Open a small popover anchored to `anchorEl` to edit the row's reminder via the
+// registered "reminder" property component (P7), writing JSON to the companion cell.
+const openReminderEditor = (
+    anchorEl: HTMLElement, it: CalItem, avId: string, reminderKey: string,
+    ctx: SuperBlockCtx, rerender: () => void,
+) => {
+    const prop = getProperty("reminder");
+    if (!prop || !prop.edit) { return; }
+    const meta = prop.parse ? prop.parse(it.reminderRaw || "") : {};
+    const pop = document.createElement("div");
+    pop.style.cssText = "position:fixed;z-index:999;background:var(--b3-menu-background);border:1px solid var(--b3-border-color);border-radius:6px;padding:10px;box-shadow:var(--b3-dialog-shadow);min-width:240px";
+    const r = anchorEl.getBoundingClientRect();
+    pop.style.left = Math.min(r.left, window.innerWidth - 260) + "px";
+    pop.style.top = (r.bottom + 4) + "px";
+    const form = prop.edit(null, meta);
+    pop.appendChild(form);
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;gap:6px;margin-top:8px;justify-content:flex-end";
+    const cancel = document.createElement("button");
+    cancel.className = "b3-button b3-button--cancel";
+    cancel.textContent = "Cancel";
+    const save = document.createElement("button");
+    save.className = "b3-button b3-button--text";
+    save.textContent = "Save";
+    const close = () => pop.remove();
+    cancel.onclick = close;
+    save.onclick = () => {
+        const newMeta = (form as unknown as {getMeta?: () => unknown}).getMeta?.() ?? {};
+        const raw = prop.serialize ? prop.serialize(newMeta) : "";
+        const data = it.reminderVal
+            ? JSON.parse(JSON.stringify(it.reminderVal)) as AvCellValue
+            : {} as AvCellValue;
+        data.type = "text";
+        (data as {text?: {content: string}}).text = {content: raw};
+        ctx.av!.setCell({avID: avId, rowID: it.rowId, keyID: reminderKey, cellID: it.reminderCellId || "", data})
+            .then(() => { close(); rerender(); })
+            .catch((e: Error) => { save.textContent = "ERR: " + e.message; });
+    };
+    bar.append(cancel, save);
+    pop.appendChild(bar);
+    document.body.appendChild(pop);
+};
+
+// Build a task chip: drag-to-reschedule + (when reminderKey is set) a reminder
+// affordance that opens the editor popover. Shared by month + range grids.
+const makeChip = (
+    it: CalItem, onDragStart: (it: CalItem) => void,
+    avId: string, reminderKey: string | undefined, ctx: SuperBlockCtx, rerender: () => void,
+): HTMLElement => {
+    const chip = document.createElement("div");
+    chip.style.cssText = "background:var(--b3-theme-primary);color:#fff;border-radius:3px;padding:1px 3px;margin-top:2px;cursor:grab;display:flex;align-items:center;gap:4px";
+    chip.draggable = true;
+    chip.ondragstart = () => onDragStart(it);
+    const title = document.createElement("span");
+    title.textContent = it.title;
+    title.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    chip.appendChild(title);
+    if (reminderKey) {
+        const bell = document.createElement("span");
+        bell.textContent = it.reminderRaw ? "🔔" : "+";
+        bell.title = "Edit reminder";
+        bell.draggable = false;
+        bell.style.cssText = "cursor:pointer;font-size:10px;opacity:.9";
+        bell.onclick = (e) => { e.stopPropagation(); openReminderEditor(chip, it, avId, reminderKey, ctx, rerender); };
+        chip.appendChild(bell);
+    }
+    return chip;
+};
+
 // Render a month grid into `container` with drag-to-reschedule; `rerender`
 // refreshes the whole view after a date write. Shared by calendar + database.
 const renderMonthGrid = (
     container: HTMLElement, items: CalItem[], avId: string, dateKey: string,
-    ctx: SuperBlockCtx, rerender: () => void, anchorTs?: number,
+    ctx: SuperBlockCtx, rerender: () => void, anchorTs?: number, reminderKey?: string,
 ) => {
     let dragRow: string | null = null;
     let dragCell = "";
@@ -165,12 +247,7 @@ const renderMonthGrid = (
             num.style.opacity = ".5";
             cell.appendChild(num);
             (byDay[dd] || []).forEach((it) => {
-                const chip = document.createElement("div");
-                chip.textContent = it.title;
-                chip.draggable = true;
-                chip.style.cssText = "background:var(--b3-theme-primary);color:#fff;border-radius:3px;padding:1px 3px;margin-top:2px;cursor:grab";
-                chip.ondragstart = () => { dragRow = it.rowId; dragCell = it.cellId; dragVal = it.val; };
-                cell.appendChild(chip);
+                cell.appendChild(makeChip(it, (i) => { dragRow = i.rowId; dragCell = i.cellId; dragVal = i.val; }, avId, reminderKey, ctx, rerender));
             });
             grid.appendChild(cell);
         })(day);
@@ -187,7 +264,7 @@ type CalState = {mode: string; days: number; anchor: number};
 // drag-to-reschedule contract as the month grid.
 const renderRangeGrid = (
     container: HTMLElement, items: CalItem[], days: number, startTs: number,
-    avId: string, dateKey: string, ctx: SuperBlockCtx, rerender: () => void,
+    avId: string, dateKey: string, ctx: SuperBlockCtx, rerender: () => void, reminderKey?: string,
 ) => {
     let dragRow: string | null = null;
     let dragCell = "";
@@ -226,12 +303,7 @@ const renderRangeGrid = (
             dragRow = null;
         };
         (byDay[keyOf(d)] || []).forEach((it) => {
-            const chip = document.createElement("div");
-            chip.textContent = it.title;
-            chip.draggable = true;
-            chip.style.cssText = "background:var(--b3-theme-primary);color:#fff;border-radius:3px;padding:1px 3px;margin-top:2px;cursor:grab";
-            chip.ondragstart = () => { dragRow = it.rowId; dragCell = it.cellId; dragVal = it.val; };
-            col.appendChild(chip);
+            col.appendChild(makeChip(it, (i) => { dragRow = i.rowId; dragCell = i.cellId; dragVal = i.val; }, avId, reminderKey, ctx, rerender));
         });
         grid.appendChild(col);
     }
@@ -243,7 +315,7 @@ const renderRangeGrid = (
 // Toolbar clicks only redraw the grid (no refetch); drags call `dataRerender`.
 const renderCalendar = (
     container: HTMLElement, items: CalItem[], avId: string, dateKey: string,
-    ctx: SuperBlockCtx, dataRerender: () => void, state: CalState,
+    ctx: SuperBlockCtx, dataRerender: () => void, state: CalState, reminderKey?: string,
 ) => {
     if (!state.anchor) { state.anchor = items.length ? items[0].ts : Date.now(); }
     const shift = (dir: number) => {
@@ -290,7 +362,7 @@ const renderCalendar = (
         const body = document.createElement("div");
         container.appendChild(body);
         if (state.mode === "month") {
-            renderMonthGrid(body, items, avId, dateKey, ctx, dataRerender, state.anchor);
+            renderMonthGrid(body, items, avId, dateKey, ctx, dataRerender, state.anchor, reminderKey);
             return;
         }
         let days = 1;
@@ -303,7 +375,7 @@ const renderCalendar = (
         } else if (state.mode === "days") {
             days = state.days;
         }
-        renderRangeGrid(body, items, days, startTs, avId, dateKey, ctx, dataRerender);
+        renderRangeGrid(body, items, days, startTs, avId, dateKey, ctx, dataRerender, reminderKey);
     };
     draw();
 };
@@ -316,11 +388,12 @@ const calendarRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         el.textContent = "Calendar — pick a database and date column in block settings.";
         return;
     }
+    const reminderKey = String(cfg.reminderCol || "") || undefined;
     const calState: CalState = {mode: String(cfg.view || "month"), days: Number(cfg.days || 3), anchor: 0};
     const render = () => {
         ctx.av!.read(avId).then((view) => {
             el.innerHTML = "";
-            renderCalendar(el, buildCalItems(view.rows as AvRow[], dateKey), avId, dateKey, ctx, render, calState);
+            renderCalendar(el, buildCalItems(view.rows as AvRow[], dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey);
         }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
     };
     render();
@@ -338,6 +411,7 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         return;
     }
     let active = String(cfg.view || "table");
+    const reminderKey = String(cfg.reminderCol || "") || undefined;
     const calState: CalState = {mode: String(cfg.calView || "month"), days: Number(cfg.days || 3), anchor: 0};
     const render = () => {
         ctx.av!.read(avId).then((view) => {
@@ -358,7 +432,7 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
             el.appendChild(body);
             if (active === "calendar") {
                 if (!dateKey) { body.textContent = "Calendar view needs a date column (set it in settings)."; return; }
-                renderCalendar(body, buildCalItems(rows, dateKey), avId, dateKey, ctx, render, calState);
+                renderCalendar(body, buildCalItems(rows, dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey);
                 return;
             }
             const table = document.createElement("table");
@@ -397,6 +471,7 @@ export const registerBuiltinFeatures = () => {
         configSchema: [
             {key: "db", label: "Database", type: "av-database"},
             {key: "dateCol", label: "Date column", type: "av-column", ofKey: "db"},
+            {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
             {key: "view", label: "Default sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
             {key: "days", label: "Days (for N-days view)", type: "number"},
         ],
@@ -409,6 +484,7 @@ export const registerBuiltinFeatures = () => {
         configSchema: [
             {key: "db", label: "Database", type: "av-database"},
             {key: "dateCol", label: "Date column (for calendar view)", type: "av-column", ofKey: "db"},
+            {key: "reminderCol", label: "Reminder column (text companion)", type: "av-column", ofKey: "db"},
             {key: "view", label: "Default view", type: "select", options: [{value: "table", label: "Table"}, {value: "calendar", label: "Calendar"}]},
             {key: "calView", label: "Calendar sub-view", type: "select", options: [{value: "month", label: "Month"}, {value: "week", label: "Week"}, {value: "day", label: "Day"}, {value: "days", label: "N days"}]},
             {key: "days", label: "Days (for N-days view)", type: "number"},
