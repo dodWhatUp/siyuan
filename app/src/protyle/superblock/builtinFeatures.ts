@@ -4,6 +4,21 @@
 
 import {registerFeature, SuperBlockCtx, getProperty} from "./runtime";
 import {applyView, ViewRecord, ViewConfig} from "./viewEngine";
+import {ReminderScheduler} from "./reminderScheduler";
+
+// Start a reminder scheduler for a reminder-configured database; auto-stops on
+// unmount (needs the "timers" cap for ctx.onUnmount). Notifications fire as each
+// reminder's time arrives. Reuses the gated ctx.av for reads.
+const startReminderScheduler = (ctx: SuperBlockCtx, avId: string, dateKey: string, reminderKey: string) => {
+    if (!ctx.av || !ctx.onUnmount) { return; }
+    const sched = new ReminderScheduler({
+        getSources: () => [{avID: avId, dateCol: dateKey, reminderCol: reminderKey}],
+        read: (id) => ctx.av!.read(id) as Promise<{rows: unknown[]}>,
+    });
+    sched.ensurePermission();
+    sched.start();
+    ctx.onUnmount(() => sched.stop());
+};
 
 // Query / Search: config = a SQL query + view (filter/sort/group) + table|list mode.
 // Reads via the gated api capability, normalizes rows, runs the shared view engine.
@@ -389,6 +404,7 @@ const calendarRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         return;
     }
     const reminderKey = String(cfg.reminderCol || "") || undefined;
+    if (reminderKey) { startReminderScheduler(ctx, avId, dateKey, reminderKey); }
     const calState: CalState = {mode: String(cfg.view || "month"), days: Number(cfg.days || 3), anchor: 0};
     const render = () => {
         ctx.av!.read(avId).then((view) => {
@@ -412,6 +428,7 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     }
     let active = String(cfg.view || "table");
     const reminderKey = String(cfg.reminderCol || "") || undefined;
+    if (reminderKey && dateKey) { startReminderScheduler(ctx, avId, dateKey, reminderKey); }
     const calState: CalState = {mode: String(cfg.calView || "month"), days: Number(cfg.days || 3), anchor: 0};
     const render = () => {
         ctx.av!.read(avId).then((view) => {
@@ -467,7 +484,7 @@ export const registerBuiltinFeatures = () => {
     registerFeature({
         id: "calendar",
         label: "Calendar",
-        caps: ["ui", "av", "watch"],
+        caps: ["ui", "av", "watch", "timers"],
         configSchema: [
             {key: "db", label: "Database", type: "av-database"},
             {key: "dateCol", label: "Date column", type: "av-column", ofKey: "db"},
@@ -480,7 +497,7 @@ export const registerBuiltinFeatures = () => {
     registerFeature({
         id: "database",
         label: "Database (multi-view)",
-        caps: ["ui", "av", "watch"],
+        caps: ["ui", "av", "watch", "timers"],
         configSchema: [
             {key: "db", label: "Database", type: "av-database"},
             {key: "dateCol", label: "Date column (for calendar view)", type: "av-column", ofKey: "db"},
