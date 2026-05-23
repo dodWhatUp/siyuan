@@ -12,6 +12,7 @@ import {Dialog} from "../../dialog";
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {superblockRender} from "../render/superblockRender";
 import {getPreset, listPresets, getFeature, listFeatures, SuperBlockFeature} from "./runtime";
+import {TEMPLATES} from "./templates";
 import {addScript} from "../util/addScript";
 import {setCodeTheme} from "../render/util";
 import {Constants} from "../../constants";
@@ -303,6 +304,10 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
         <span class="ft__smaller ft__on-surface fn__flex-1" id="sbCapsHint">${capsHint(kind)}</span>
     </div>
     <div id="sbConfigForm" style="display:none"></div>
+    <select class="b3-select" id="sbTemplateSelect" style="width:100%;margin-bottom:8px">
+        <option value="">— insert example template —</option>
+        ${TEMPLATES.map((t, i) => `<option value="${i}">${t.name.replace(/"/g, "&quot;")}</option>`).join("")}
+    </select>
     <div id="sbCodeHint" class="ft__smaller ft__on-surface" style="margin-bottom: 8px">Code runs with <code class="fn__code">ctx</code> in scope (<code class="fn__code">ctx.el</code> = the block element).</div>
     <textarea spellcheck="false"></textarea>
 </div>
@@ -321,8 +326,19 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
     const codeHint = dialog.element.querySelector("#sbCodeHint") as HTMLElement;
     const select = dialog.element.querySelector("#sbKindSelect") as HTMLSelectElement;
     const hint = dialog.element.querySelector("#sbCapsHint") as HTMLElement;
+    const tplSelect = dialog.element.querySelector("#sbTemplateSelect") as HTMLSelectElement;
 
-    // Feature kind → config form (no-code); preset kind → code editor.
+    // Picking a template fills the code editor (then resets the dropdown).
+    tplSelect.addEventListener("change", () => {
+        const i = parseInt(tplSelect.value, 10);
+        if (!isNaN(i) && TEMPLATES[i]) {
+            textarea.value = TEMPLATES[i].code;
+            textarea.dispatchEvent(new Event("input"));   // refresh the syntax-highlight overlay
+        }
+        tplSelect.value = "";
+    });
+
+    // Feature kind → config form (no-code); preset kind → code editor + templates.
     const toggleMode = (k: string) => {
         const feature = getFeature(k);
         if (feature) {
@@ -331,11 +347,13 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
             configForm.style.display = "";
             codeWrap.style.display = "none";
             codeHint.style.display = "none";
+            tplSelect.style.display = "none";
             hint.textContent = `feature · ${feature.caps.join(", ")}`;
         } else {
             configForm.style.display = "none";
             codeWrap.style.display = "";
             codeHint.style.display = "";
+            tplSelect.style.display = "";
             hint.textContent = capsHint(k);
         }
     };
