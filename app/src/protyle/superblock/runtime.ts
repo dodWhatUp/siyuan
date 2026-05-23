@@ -32,6 +32,12 @@ export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "emb
 export interface SuperBlockCtx {
     blockId: string;
     el?: HTMLElement; // present only when the "ui" capability is enabled
+    // "ui" convenience: render shortcuts (return the host for chaining) and a
+    // per-block console panel (ctx.console / ctx.log) for debugging output.
+    text?: (s: unknown) => HTMLElement;
+    html?: (s: unknown) => HTMLElement;
+    console?: {log: (...a: unknown[]) => void; warn: (...a: unknown[]) => void; error: (...a: unknown[]) => void};
+    log?: (...a: unknown[]) => void;
     // present only when the "persist" capability is enabled. Reads/writes a JSON
     // blob stored in the block's `custom-sb-state` IAL attribute (travels with
     // sync/export). set() is fire-and-forget — DOM is updated synchronously so a
@@ -436,8 +442,50 @@ interface CapEnv {
 type CapProvider = (env: CapEnv) => void;
 
 export const CAP_PROVIDERS = new Map<string, CapProvider>([
-    ["ui", ({ctx, host}) => {
+    ["ui", ({ctx, host, blockId}) => {
         ctx.el = host;
+        // Render shortcuts (return the host so calls can chain).
+        ctx.text = (s: unknown) => { host.textContent = String(s); return host; };
+        ctx.html = (s: unknown) => { host.innerHTML = String(s); return host; };
+        // Per-block dev tools: a faint "re-run / console" row + a collapsible console
+        // panel, kept as siblings of the host (so they survive host re-renders/clears).
+        const wrapper = host.parentElement;
+        let panel = wrapper ? wrapper.querySelector(":scope > .sb-console") as HTMLElement | null : null;
+        if (wrapper && !wrapper.querySelector(":scope > .sb-tools")) {
+            const tools = document.createElement("div");
+            tools.className = "sb-tools";
+            tools.setAttribute("contenteditable", "false");
+            tools.style.cssText = "display:flex;gap:10px;font-size:11px;opacity:.45;margin-top:2px;user-select:none";
+            const rerun = document.createElement("span");
+            rerun.textContent = "↻ re-run";
+            rerun.style.cursor = "pointer";
+            rerun.onclick = () => rerenderSuperBlock(blockId);
+            const toggle = document.createElement("span");
+            toggle.textContent = "▸ console";
+            toggle.style.cursor = "pointer";
+            toggle.onclick = () => { if (panel) { panel.style.display = panel.style.display === "none" ? "" : "none"; } };
+            tools.append(rerun, toggle);
+            wrapper.appendChild(tools);
+        }
+        if (wrapper && !panel) {
+            panel = document.createElement("div");
+            panel.className = "sb-console";
+            panel.setAttribute("contenteditable", "false");
+            panel.style.cssText = "display:none;font-family:var(--b3-font-family-code,monospace);font-size:11px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:4px;padding:4px 6px;margin-top:2px;max-height:160px;overflow:auto;white-space:pre-wrap";
+            wrapper.appendChild(panel);
+        }
+        if (panel) { panel.innerHTML = ""; }   // clear log on each (re)run
+        const write = (level: string, args: unknown[]) => {
+            if (!panel) { return; }
+            const line = document.createElement("div");
+            if (level === "error") { line.style.color = "var(--b3-card-error-color, #d23)"; }
+            else if (level === "warn") { line.style.color = "var(--b3-card-warning-color, #b80)"; }
+            line.textContent = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+            panel.appendChild(line);
+            panel.style.display = "";   // reveal the panel when something is logged
+        };
+        ctx.console = {log: (...a) => write("log", a), warn: (...a) => write("warn", a), error: (...a) => write("error", a)};
+        ctx.log = ctx.console.log;
         ctx.open = (id: string, newWindow?: boolean) => {
             if (!id) { return; }
             if (newWindow) { openNewWindowById(id); return; }
@@ -857,6 +905,19 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 
 // Runs one super-block: builds the gated ctx, compiles the code once, executes it.
 // Errors are contained — a throwing block shows an inline message, never breaks the doc.
+// Styled inline error box (replaces plain red text). Shows the message + a hint.
+const renderError = (host: HTMLElement, message: string) => {
+    host.innerHTML = "";
+    const box = document.createElement("div");
+    box.style.cssText = "border:1px solid var(--b3-card-error-color,#d23);border-radius:4px;padding:6px 8px;font-size:12px;color:var(--b3-card-error-color,#d23);background:var(--b3-card-error-background,rgba(210,40,40,.07))";
+    box.textContent = "⚠ " + message;
+    const hint = document.createElement("div");
+    hint.style.cssText = "opacity:.7;font-size:11px;margin-top:2px";
+    hint.textContent = "Open the ✎ editor to fix the code, or click ↻ re-run.";
+    box.appendChild(hint);
+    host.appendChild(box);
+};
+
 export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string, configRaw?: string) => {
     // FEATURE mode if `kind` names a registered feature; else raw-code (preset) mode.
     const feature = getFeature(kind);
@@ -897,7 +958,7 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
             feature.run(ctx, config);
             finish();
         } catch (e) {
-            host.textContent = `super-block error: ${(e as Error).message}`;
+            renderError(host, (e as Error).message);
             emit("error", {blockId, kind, detail: (e as Error).message});
         }
         return;
@@ -915,9 +976,18 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         const fn = compile(code);
         const ret = fn(buildCtx(blockId, host, caps));
         finish();
-        // async user code: surface a rejection the same way as a sync throw.
         if (ret && typeof (ret as Promise<unknown>).then === "function") {
+            // Loading state: show "running…" while async code awaits, if nothing's
+            // been rendered yet; removed once the promise settles.
+            let loading: HTMLElement | null = null;
+            if (!host.firstChild && !host.textContent) {
+                loading = document.createElement("span");
+                loading.textContent = "running…";
+                loading.style.cssText = "opacity:.5;font-size:12px";
+                host.appendChild(loading);
+            }
             (ret as Promise<unknown>).then((val: unknown) => {
+                if (loading && loading.parentNode === host) { host.removeChild(loading); }
                 // Forgiving render: if the code RETURNED a string/number/Node and
                 // didn't write to ctx.el itself, show it automatically — so
                 // `return "hello"` or `return someElement` just works.
@@ -927,12 +997,12 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
                 }
             }).catch((e: Error) => {
                 // async user code: surface a rejection the same way as a sync throw.
-                host.textContent = `super-block error: ${e.message}`;
+                renderError(host, e.message);
                 emit("error", {blockId, kind, detail: e.message});
             });
         }
     } catch (e) {
-        host.textContent = `super-block error: ${(e as Error).message}`;
+        renderError(host, (e as Error).message);
         emit("error", {blockId, kind, detail: (e as Error).message});
     }
 };
