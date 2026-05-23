@@ -150,6 +150,108 @@ const editReminder = (_cell: unknown, metaIn: unknown): HTMLElement => {
     return wrap;
 };
 
+// --- Location component (notes/16) ------------------------------------------
+export const LOCATION_SCHEMA = "siyuan-superblock/location@1";
+
+export interface LocationMeta {
+    name?: string;
+    lat: number;
+    lng: number;
+    format?: string;     // coordinate reference system; default "wgs84"
+    address?: string;
+    geojson?: {type: "Point"; coordinates: [number, number]};
+}
+
+// Parse common location string formats → {name?, lat, lng}:
+//   "48.8584,2.2945" | "name | lat,lng" | "name @ lat,lng" | "geo:lat,lng"
+export const parseLocationString = (s: string): {name?: string; lat: number; lng: number} | null => {
+    if (!s) {
+        return null;
+    }
+    let str = s.trim();
+    let name: string | undefined;
+    const sep = str.match(/\s*[|@]\s*/);
+    if (sep && sep.index !== undefined) {
+        name = str.slice(0, sep.index).trim() || undefined;
+        str = str.slice(sep.index + sep[0].length).trim();
+    }
+    str = str.replace(/^geo:/i, "").trim();
+    const m = str.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    if (!m) {
+        return null;
+    }
+    const lat = parseFloat(m[1]);
+    const lng = parseFloat(m[2]);
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return null;
+    }
+    return {name, lat, lng};
+};
+
+export const parseLocationMeta = (raw: string): LocationMeta | null => {
+    if (!raw) {
+        return null;
+    }
+    try {
+        const o = JSON.parse(raw);
+        if (o && typeof o === "object" && typeof o.lat === "number" && typeof o.lng === "number") {
+            return o as LocationMeta;
+        }
+    } catch { /* not JSON — try the plain string forms below */ }
+    const p = parseLocationString(raw);
+    return p ? {name: p.name, lat: p.lat, lng: p.lng, format: "wgs84"} : null;
+};
+
+export const serializeLocationMeta = (meta: LocationMeta): string => {
+    const out: Record<string, unknown> = {
+        $schema: LOCATION_SCHEMA, _type: "location",
+        lat: meta.lat, lng: meta.lng, format: meta.format || "wgs84",
+    };
+    if (meta.name) { out.name = meta.name; }
+    if (meta.address) { out.address = meta.address; }
+    if (meta.geojson) { out.geojson = meta.geojson; }
+    return JSON.stringify(out);
+};
+
+const renderLocation = (_cell: unknown, meta: unknown): HTMLElement => {
+    const m = meta as LocationMeta | null;
+    const el = document.createElement("span");
+    el.style.cssText = "font-size:11px;opacity:.85";
+    el.textContent = m && typeof m.lat === "number"
+        ? `📍 ${m.name || `${m.lat.toFixed(4)}, ${m.lng.toFixed(4)}`}`
+        : "📍 set location";
+    return el;
+};
+
+const editLocation = (_cell: unknown, metaIn: unknown): HTMLElement => {
+    const meta = (metaIn as LocationMeta) || ({} as LocationMeta);
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;flex-direction:column;gap:6px;font-size:12px";
+    const name = document.createElement("input");
+    name.className = "b3-text-field";
+    name.placeholder = "name";
+    name.value = meta.name || "";
+    const coords = document.createElement("input");
+    coords.className = "b3-text-field";
+    coords.placeholder = "lat, lng  (or 'name | lat,lng')";
+    if (typeof meta.lat === "number") { coords.value = `${meta.lat}, ${meta.lng}`; }
+    const address = document.createElement("input");
+    address.className = "b3-text-field";
+    address.placeholder = "address (optional)";
+    address.value = meta.address || "";
+    wrap.append(labelRow("Name", name), labelRow("Coordinates", coords), labelRow("Address", address));
+    (wrap as unknown as {getMeta: () => LocationMeta | null}).getMeta = (): LocationMeta | null => {
+        const p = parseLocationString(coords.value);
+        if (!p) { return null; }
+        const out: LocationMeta = {lat: p.lat, lng: p.lng, format: "wgs84"};
+        const nm = name.value.trim() || p.name;
+        if (nm) { out.name = nm; }
+        if (address.value.trim()) { out.address = address.value.trim(); }
+        return out;
+    };
+    return wrap;
+};
+
 export const registerBuiltinProperties = () => {
     registerProperty({
         id: "reminder",
@@ -160,5 +262,15 @@ export const registerBuiltinProperties = () => {
         serialize: (m) => serializeReminderMeta(m as ReminderMeta),
         render: renderReminder,
         edit: editReminder,
+    });
+    registerProperty({
+        id: "location",
+        label: "Location",
+        baseType: "text",
+        metaSchemaId: LOCATION_SCHEMA,
+        parse: parseLocationMeta,
+        serialize: (m) => serializeLocationMeta(m as LocationMeta),
+        render: renderLocation,
+        edit: editLocation,
     });
 };
