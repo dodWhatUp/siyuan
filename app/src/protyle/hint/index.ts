@@ -17,6 +17,7 @@ import {transaction, updateTransaction} from "../wysiwyg/transaction";
 import {insertHTML} from "../util/insertHTML";
 import {highlightRender} from "../render/highlightRender";
 import {openSuperBlockSettings} from "../superblock/settings";
+import {openSuperBlockEditor} from "../superblock/editor";
 import {assetMenu, imgMenu, setFold} from "../../menus/protyle";
 import {hideElements} from "../ui/hideElements";
 import {fetchPost} from "../../util/fetch";
@@ -810,7 +811,7 @@ ${genHintItemHTML(item)}
                     if (value === "<div>") {
                         newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else if (value === "<superblock>") {
-                        newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="calc" custom-sb-code="${Lute.EscapeHTMLStr('const a = 2, b = 2; ctx.el.textContent = a + " + " + b + " = " + (a + b);')}">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+                        newHTML = `<div data-node-id="${id}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="app" custom-sb-code="${Lute.EscapeHTMLStr('ctx.el.textContent = "Super Block (app) — click the pencil to edit code or pick a template.";')}">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else {
                         editableElement.textContent = textContent;
                         newHTML = protyle.lute.SpinBlockDOM(nodeElement.outerHTML);
@@ -825,12 +826,17 @@ ${genHintItemHTML(item)}
                         newHTML = nodeElement.outerHTML;
                     }
                     updateTransaction(protyle, id, newHTML, html);
+                    // New super-block → open the code editor right away.
+                    if (value === "<superblock>") {
+                        const sbNode = nodeElement;
+                        setTimeout(() => openSuperBlockEditor(sbNode), 0);
+                    }
                 } else {
                     let newHTML = protyle.lute.SpinBlockDOM(textContent);
                     if (value === "<div>") {
                         newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     } else if (value === "<superblock>") {
-                        newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="calc" custom-sb-code="${Lute.EscapeHTMLStr('const a = 2, b = 2; ctx.el.textContent = a + " + " + b + " = " + (a + b);')}">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+                        newHTML = `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" custom-sb-kind="app" custom-sb-code="${Lute.EscapeHTMLStr('ctx.el.textContent = "Super Block (app) — click the pencil to edit code or pick a template.";')}">${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
                     }
                     const oldHTML = nodeElement.outerHTML;
                     let foldData;
