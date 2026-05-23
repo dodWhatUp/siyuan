@@ -15,6 +15,11 @@ import {getAllEditor} from "../../layout/getAll";
 import {openFileById} from "../../editor/util";
 import {openNewWindowById} from "../../window/openNewWindow";
 import {Constants} from "../../constants";
+// Rich-UI building blocks exposed through the "siyuan" capability so block code /
+// plugins can show native toasts, dialogs, and context menus (see ctx.siyuan).
+import {showMessage} from "../../dialog/message";
+import {Dialog} from "../../dialog/index";
+import {Menu} from "../../plugin/Menu";
 import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {genIconHTML} from "../render/util";
@@ -66,6 +71,10 @@ export interface SuperBlockCtx {
         protyleClass: () => unknown;    // the Protyle editor constructor
         app: () => unknown;             // the SiYuan App instance
         getAllEditor: typeof getAllEditor;
+        // --- rich UI (native widgets) ---
+        showMessage: typeof showMessage; // toast: showMessage("done"[, timeout, "info|error"])
+        Dialog: typeof Dialog;           // modal dialog class: new ctx.siyuan.Dialog({title, content, …})
+        Menu: typeof Menu;               // context menu class: new ctx.siyuan.Menu("id").addItem(…).open({x,y})
     };
     // present only when the "libs" capability is enabled. Lazy-loads an
     // allowlisted library from CDN (cached per session) and resolves to its
@@ -536,14 +545,24 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             if (app) { openFileById({app, id, action: [Constants.CB_GET_FOCUS, Constants.CB_GET_HL]}); }
         };
         ctx.siyuan = {
+            // Call ANY kernel endpoint (read or write). Unlike ctx.api (which is
+            // allowlisted to read-only endpoints), this is the unrestricted toolbox —
+            // only present on blocks that enable the "siyuan" capability.
             api: (endpoint: string, data?: object) => fetchSyncPost(endpoint, data || {}),
             apiCb: (endpoint: string, data: object, cb: (r: IWebSocketData) => void) => fetchPost(endpoint, data, cb),
+            // Open/focus a block in the current tab, or a new window.
             openBlock,
+            // SiYuan constants (event names, action modes, etc.).
             constants: Constants,
-            lute: () => (window as unknown as {Lute?: unknown}).Lute,
-            protyleClass: () => { const e = getAllEditor()[0]; return e ? e.constructor : undefined; },
-            app: () => getAllEditor()[0]?.protyle?.app,
-            getAllEditor,
+            // Lazily-resolved frontend internals (the editor must exist at call time):
+            lute: () => (window as unknown as {Lute?: unknown}).Lute,             // markdown engine
+            protyleClass: () => { const e = getAllEditor()[0]; return e ? e.constructor : undefined; },  // Protyle ctor
+            app: () => getAllEditor()[0]?.protyle?.app,                            // App instance
+            getAllEditor,                                                          // all open editors
+            // Native UI widgets — show feedback without hand-rolling DOM:
+            showMessage,   // toast notification
+            Dialog,        // modal dialog (class)
+            Menu,          // right-click / context menu (class)
         };
     }],
     ["timers", ({ctx, host}) => {
