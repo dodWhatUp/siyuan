@@ -15,7 +15,7 @@ import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
 import {addScript} from "../util/addScript";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -28,10 +28,12 @@ export interface SuperBlockCtx {
         get: <T = unknown>(key: string) => T | undefined;
         set: (key: string, value: unknown) => void;
     };
-    // present only when the "api" capability is enabled. Calls the SiYuan kernel,
-    // restricted to a read-only endpoint allowlist. First use prompts a confirm.
+    // the SiYuan kernel namespace. `post` (read-only allowlist) is present with the
+    // "api" capability; `write` (mutating allowlist, no deletes) with the "write"
+    // capability. Both prompt a per-block confirm on first use; writes are logged.
     api?: {
-        post: (path: string, body?: object) => Promise<IWebSocketData>;
+        post?: (path: string, body?: object) => Promise<IWebSocketData>;
+        write?: (path: string, body?: object) => Promise<IWebSocketData>;
     };
     // present only when the "network" capability is enabled. Pass-through to the
     // browser fetch after a first-use confirm; grants are per-domain (policy.ts),
@@ -68,7 +70,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write"]},
 };
 
 // Allowlisted libraries for ctx.require — pinned CDN builds and the global each
@@ -174,6 +176,18 @@ const API_ALLOW = [
     "/api/attr/getBlockAttrs",
 ];
 
+// Mutating endpoints a super-block may call via ctx.api.write. Intentionally
+// excludes deletes and notebook ops — a block can update/insert/attribute, not
+// destroy. Gated by the "write" capability + a per-block confirm; every call is
+// logged (audit). This is what lets a block ACT (e.g. mark a task done).
+const WRITE_ALLOW = [
+    "/api/attr/setBlockAttrs",
+    "/api/block/updateBlock",
+    "/api/block/insertBlock",
+    "/api/block/appendBlock",
+    "/api/block/prependBlock",
+];
+
 // First-use confirm, now persisted (policy.ts → localStorage, per device). Once
 // the user allows `label` for `blockId` it is remembered across reloads. `label`
 // is "api" or "network:<host>" (per-domain → doubles as the network allowlist).
@@ -224,9 +238,10 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
             },
         };
     }
-    if (caps.includes("api")) {
-        ctx.api = {
-            post: async (path: string, body?: object): Promise<IWebSocketData> => {
+    if (caps.includes("api") || caps.includes("write")) {
+        ctx.api = {};
+        if (caps.includes("api")) {
+            ctx.api.post = async (path: string, body?: object): Promise<IWebSocketData> => {
                 if (!API_ALLOW.includes(path)) {
                     throw new Error(`api: endpoint not allowed (${path})`);
                 }
@@ -234,8 +249,21 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                     throw new Error("api: denied by user");
                 }
                 return fetchSyncPost(path, body || {});
-            },
-        };
+            };
+        }
+        if (caps.includes("write")) {
+            ctx.api.write = async (path: string, body?: object): Promise<IWebSocketData> => {
+                if (!WRITE_ALLOW.includes(path)) {
+                    throw new Error(`api.write: endpoint not allowed (${path})`);
+                }
+                if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
+                    throw new Error("write: denied by user");
+                }
+                // Audit: every write a block performs is logged.
+                console.log("[super-block write]", blockId.slice(-6), path, body);
+                return fetchSyncPost(path, body || {});
+            };
+        }
     }
     if (caps.includes("network")) {
         ctx.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {

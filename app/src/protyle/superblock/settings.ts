@@ -12,7 +12,7 @@ import type {Capability} from "./runtime";
 
 // The capabilities exposed as global toggles. compute/ui are intentionally not
 // listed — disabling them just neuters blocks; the meaningful controls are these.
-const TOGGLEABLE: Capability[] = ["api", "network", "persist", "libs"];
+const TOGGLEABLE: Capability[] = ["write", "api", "network", "persist", "libs"];
 
 const row = (id: string, label: string, hint: string, checked: boolean) => `<label class="fn__flex" style="padding: 6px 0; align-items: center">
     <input type="checkbox" id="${id}" class="b3-switch fn__flex-center"${checked ? " checked" : ""}>
@@ -41,10 +41,11 @@ export const openSuperBlockSettings = () => {
     <div class="b3-dialog__action" style="padding: 8px 0 0; border: 0"></div>
     <div class="ft__smaller ft__on-surface" style="margin: 8px 0 2px">Disable individual capabilities (dropped from <code class="fn__code">ctx</code> for every block):</div>
     ${TOGGLEABLE.map((cap) => row(`sbCap_${cap}`, `Disable "${cap}"`,
-        cap === "api" ? "Block code cannot call the SiYuan kernel." :
-            cap === "network" ? "Block code cannot make network requests." :
-                cap === "libs" ? "Block code cannot load external libraries." :
-                    "Block code cannot read/write persisted state.",
+        cap === "write" ? "Block code cannot modify the vault (kernel writes)." :
+            cap === "api" ? "Block code cannot read from the SiYuan kernel." :
+                cap === "network" ? "Block code cannot make network requests." :
+                    cap === "libs" ? "Block code cannot load external libraries." :
+                        "Block code cannot read/write persisted state.",
         policy.disabled.includes(cap))).join("")}
     <div class="fn__hr"></div>
     <div class="fn__flex" style="align-items: center; padding: 8px 0">
