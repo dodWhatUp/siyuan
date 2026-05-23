@@ -19,11 +19,24 @@ export const parseHotkey = (spec: string): Hotkey => {
     return hk;
 };
 
-export interface KeyEventLike { key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean; }
+export interface KeyEventLike { key: string; code?: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean; }
+
+// The set of names an event can match. Includes the PHYSICAL key (event.code) so
+// that e.g. macOS Option+1 — where event.key is "¡" not "1" — still matches "alt+1".
+const eventKeys = (ev: KeyEventLike): Set<string> => {
+    const out = new Set<string>();
+    if (ev.key) { out.add(ev.key.toLowerCase()); }
+    if (ev.code) {
+        const c = ev.code.toLowerCase();        // "digit1", "keyk", "f1"
+        out.add(c);
+        out.add(c.replace(/^key/, "").replace(/^digit/, ""));   // "keyk"→"k", "digit1"→"1"
+    }
+    return out;
+};
 
 export const matchHotkey = (spec: string, ev: KeyEventLike): boolean => {
     const hk = parseHotkey(spec);
-    if (!hk.key || ev.key.toLowerCase() !== hk.key) { return false; }
+    if (!hk.key || !eventKeys(ev).has(hk.key)) { return false; }
     if (hk.shift !== ev.shiftKey) { return false; }
     if (hk.alt !== ev.altKey) { return false; }
     if (hk.mod) {

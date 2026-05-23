@@ -109,6 +109,9 @@ export async function run(): Promise<void> {
     ok("hotkey.mod.ctrl", matchHotkey("mod+s", k("s", {ctrlKey: true})));
     ok("hotkey.shift", matchHotkey("shift+a", k("a", {shiftKey: true})) && !matchHotkey("shift+a", k("a")));
     ok("hotkey.wrongkey", !matchHotkey("ctrl+k", k("j", {ctrlKey: true})));
+    // macOS: Option+1 yields key "¡" but code "Digit1" → must still match "alt+1"
+    ok("hotkey.mac.option1", matchHotkey("alt+1", {key: "¡", code: "Digit1", ctrlKey: false, shiftKey: false, altKey: true, metaKey: false}));
+    ok("hotkey.ctrlshiftk", matchHotkey("ctrl+shift+k", {key: "K", code: "KeyK", ctrlKey: true, shiftKey: true, altKey: false, metaKey: false}));
 
     // ---- .ics export -----------------------------------------------------
     eq("ics.trigger", [minutesToTrigger(-15), minutesToTrigger(-1440), minutesToTrigger(-90), minutesToTrigger(0)],
