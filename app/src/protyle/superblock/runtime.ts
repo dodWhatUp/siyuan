@@ -11,8 +11,10 @@
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {confirmDialog} from "../../dialog/confirmDialog";
 import {effectiveCaps, isKilled} from "./policy";
+import {getAllEditor} from "../../layout/getAll";
+import {Constants} from "../../constants";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -33,6 +35,10 @@ export interface SuperBlockCtx {
     // present only when the "network" capability is enabled. Pass-through to the
     // browser fetch after a first-use confirm. (Domain allowlist comes later.)
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    // present only when the "embed" capability is enabled. Mounts a REAL nested
+    // Protyle editor for the target block into ctx.el — fully editable, unlike a
+    // stock read-only embed. The nested editor is destroyed on re-render.
+    embed?: (targetBlockId: string) => void;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -44,8 +50,13 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     calc: {caps: ["compute", "ui"]},
     hello: {caps: ["compute", "ui"]},
     data: {caps: ["compute", "ui", "persist"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network"]},
+    embed: {caps: ["compute", "ui", "embed"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed"]},
 };
+
+// Nested Protyle editors mounted by ctx.embed, tracked per host so they can be
+// destroyed before the host is cleared on re-render (avoids leaked WS listeners).
+const nestedEditors = new WeakMap<HTMLElement, Array<{destroy: () => void}>>();
 
 const SB_STATE = "custom-sb-state";
 
@@ -158,6 +169,40 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
             return fetch(input, init);
         };
     }
+    if (caps.includes("embed")) {
+        ctx.embed = (targetBlockId: string) => {
+            const editors = getAllEditor();
+            const base = editors[0];
+            if (!base) {
+                const note = document.createElement("div");
+                note.textContent = "embed: no editor available";
+                host.appendChild(note);
+                return;
+            }
+            const wrap = document.createElement("div");
+            wrap.className = "sb-embed";
+            host.appendChild(wrap);
+            // Construct via the existing editor's class (avoids a hard import +
+            // import cycle); app comes from that editor's IProtyle.
+            const ProtyleCtor = base.constructor as new (
+                app: typeof base.protyle.app, el: HTMLElement, opts: object,
+            ) => {destroy: () => void};
+            const nested = new ProtyleCtor(base.protyle.app, wrap, {
+                blockId: targetBlockId,
+                // CB_GET_ALL zooms to just this block's subtree (not its siblings),
+                // so embedding a block from the same doc doesn't pull the embed
+                // block back in and recurse.
+                action: [Constants.CB_GET_ALL],
+                render: {background: false, title: false, gutter: true, scroll: false, breadcrumb: true},
+            });
+            let list = nestedEditors.get(host);
+            if (!list) {
+                list = [];
+                nestedEditors.set(host, list);
+            }
+            list.push(nested);
+        };
+    }
     return ctx;
 };
 
@@ -165,6 +210,19 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 // Errors are contained — a throwing block shows an inline message, never breaks the doc.
 export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string) => {
     const preset = PRESETS[kind] || PRESETS.calc;
+    // Destroy any nested editors from a previous mount before clearing the host,
+    // so their WebSocket/listeners are released (not just orphaned in the DOM).
+    const prevNested = nestedEditors.get(host);
+    if (prevNested) {
+        prevNested.forEach((p) => {
+            try {
+                p.destroy();
+            } catch (e) {
+                // ignore teardown errors
+            }
+        });
+        nestedEditors.delete(host);
+    }
     host.innerHTML = "";
     // Global kill-switch (policy.ts): no super-block code runs at all.
     if (isKilled()) {

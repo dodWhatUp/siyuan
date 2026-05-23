@@ -56,6 +56,12 @@ export const superblockRender = (element: Element) => {
         if (block.getAttribute("data-sb-rendered") === "true") {
             return;
         }
+        // Recursion guard: a super-block rendered INSIDE another super-block's
+        // mounted content (e.g. an embedded nested editor) must not auto-mount,
+        // or an embed of a same-doc block could recurse without bound.
+        if (block.closest(".sb-host")) {
+            return;
+        }
         const stock = block.querySelector("protyle-html") as HTMLElement | null;
         // The middle wrapper holds <protyle-html> + the ZWSP span.
         const wrapper = stock?.parentElement;
