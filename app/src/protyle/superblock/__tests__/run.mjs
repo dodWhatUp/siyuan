@@ -27,19 +27,24 @@ writeFileSync(path.join(work, "runtime.ts"),
     "export const registerFeature=(d)=>__features.set(d.id,d);\n");
 cpSync(path.join(here, "superblock.test.ts"), path.join(work, "superblock.test.ts"));
 
-console.log("bundling (esbuild)…");
-execFileSync("npx", ["--yes", "esbuild", "superblock.test.ts", "--bundle", "--platform=node", "--format=cjs", "--outfile=test.cjs"],
-    {cwd: work, stdio: "inherit"});
-
 const req = createRequire(path.join(work, "noop.js"));
-let JSDOM;
-try {
-    ({JSDOM} = req("jsdom"));
-} catch {
-    console.log("installing jsdom (one-time)…");
-    execFileSync("npm", ["i", "jsdom", "--no-save", "--no-audit", "--no-fund"], {cwd: work, stdio: "inherit"});
-    ({JSDOM} = req("jsdom"));
-}
+const need = (name) => {
+    try { return req(name); } catch {
+        console.log(`installing ${name} (one-time)…`);
+        execFileSync("npm", ["i", name, "--no-save", "--no-audit", "--no-fund"], {cwd: work, stdio: "inherit"});
+        return req(name);
+    }
+};
+
+console.log("bundling (esbuild)…");
+const esbuild = need("esbuild");
+esbuild.buildSync({
+    entryPoints: [path.join(work, "superblock.test.ts")],
+    bundle: true, platform: "node", format: "cjs",
+    outfile: path.join(work, "test.cjs"),
+});
+
+const {JSDOM} = need("jsdom");
 
 const dom = new JSDOM("<!DOCTYPE html><body></body>", {pretendToBeVisual: true});
 globalThis.window = dom.window;
@@ -50,3 +55,6 @@ globalThis.URL = dom.window.URL;
 
 const mod = req(path.join(work, "test.cjs"));
 await mod.run();
+// The calendar integration starts a polling scheduler (live interval) that keeps
+// the event loop alive; exit explicitly with the status set by the test.
+process.exit(process.exitCode || 0);

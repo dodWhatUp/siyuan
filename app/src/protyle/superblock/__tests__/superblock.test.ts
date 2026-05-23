@@ -152,8 +152,9 @@ export async function run(): Promise<void> {
         };
         __features.get("database")!.run(boardCtx, {db: "AV1", groupCol: "ks", view: "board"});
         await tick();
-        const colDivs = Array.from(boardCtx.el.querySelectorAll("div")).filter((d) => /\(\d+\)/.test((d.firstChild && (d.firstChild as HTMLElement).textContent) || ""));
-        ok("board.columns", colDivs.length === 2);
+        const headers = Array.from(boardCtx.el.querySelectorAll("div")).filter((d) =>
+            /\(\d+\)\s*$/.test(d.textContent || "") && (d as HTMLElement).style.fontWeight === "bold");
+        ok("board.columns", headers.length === 2);
     }
 
     // ---- summary ---------------------------------------------------------
