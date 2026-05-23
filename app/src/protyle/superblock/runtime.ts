@@ -27,7 +27,7 @@ import {matchHotkey} from "./hotkey";
 import {storagePath} from "./storage";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -124,6 +124,10 @@ export interface SuperBlockCtx {
         writeText: (text: string) => Promise<void>;
         readText: () => Promise<string>;
     };
+    // present with the "worker" capability. Run a SELF-CONTAINED function in a
+    // background Web Worker (off the main thread) with a structured-cloneable input,
+    // resolving to its result. The fn can't use closures/DOM (it runs isolated).
+    worker?: (fn: (input: unknown) => unknown, input?: unknown) => Promise<unknown>;
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -181,7 +185,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -722,6 +726,23 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             writeText: (text: string) => navigator.clipboard.writeText(text),
             readText: () => navigator.clipboard.readText(),
         };
+    }],
+    ["worker", ({ctx, host}) => {
+        ctx.worker = (fn: (input: unknown) => unknown, input?: unknown): Promise<unknown> =>
+            new Promise((resolve, reject) => {
+                const src = `self.onmessage=function(e){Promise.resolve((${fn.toString()})(e.data)).then(function(r){self.postMessage({r:r})}).catch(function(err){self.postMessage({err:String((err&&err.message)||err)})})}`;
+                const url = URL.createObjectURL(new Blob([src], {type: "application/javascript"}));
+                const wkr = new Worker(url);
+                getDisposables(host).unmounts.push(() => { wkr.terminate(); URL.revokeObjectURL(url); });
+                wkr.onmessage = (e: MessageEvent) => {
+                    const d = e.data as {r?: unknown; err?: string};
+                    wkr.terminate();
+                    URL.revokeObjectURL(url);
+                    if (d && d.err) { reject(new Error(d.err)); } else { resolve(d ? d.r : undefined); }
+                };
+                wkr.onerror = () => { wkr.terminate(); URL.revokeObjectURL(url); reject(new Error("worker error")); };
+                wkr.postMessage(input);
+            });
     }],
     ["storage", ({ctx}) => {
         ctx.storage = {
