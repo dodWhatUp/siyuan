@@ -583,9 +583,9 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
         ctx.cron = (every: string | number, fn: () => void): (() => void) => {
             const ms = parseEvery(every);
             if (!ms) { return () => { /* invalid spec → no-op */ }; }
-            const id = window.setInterval(() => {
-                try { fn(); } catch (e) { console.warn("[superblock] cron error", e); }
-            }, ms);
+            const run = () => { try { fn(); } catch (e) { console.warn("[superblock] cron error", e); } };
+            run();   // leading edge: run once immediately so the block isn't blank until the first interval
+            const id = window.setInterval(run, ms);
             d.timers.push(id);   // reuse the timers disposal list → cleared on unmount/removal
             return () => clearInterval(id);
         };
