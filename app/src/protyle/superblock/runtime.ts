@@ -88,6 +88,10 @@ export interface SuperBlockCtx {
         // cell-value object for that column type. Gated by the write confirm.
         setCell: (op: {avID: string; rowID: string; keyID: string; cellID: string; data: unknown}) => Promise<IWebSocketData>;
     };
+    // present in FEATURE mode: the block's parsed, validated config (from
+    // custom-sb-config merged over the feature's defaultConfig). Lets a feature's
+    // run(ctx, config) be config-driven instead of hard-coded (notes/14, L2/L3).
+    config?: Record<string, unknown>;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -119,6 +123,33 @@ export const listPresets = (): string[] => {
     });
     return ids;
 };
+
+// --- Feature layer (notes/14, L2) -------------------------------------------
+// A feature is a named definition that bundles capabilities + a config schema +
+// a run(ctx, config). A block in FEATURE mode (custom-sb-kind names a feature)
+// runs the feature with its parsed config instead of raw code. The calendar etc.
+// become features. Field types in configSchema drive the auto-generated form (L3).
+export type ConfigField =
+    | {key: string; label: string; type: "text" | "number" | "checkbox" | "date" | "block-ref" | "code"}
+    | {key: string; label: string; type: "select"; options: {value: string; label: string}[]}
+    | {key: string; label: string; type: "av-database"}
+    | {key: string; label: string; type: "av-column"; ofKey: string};
+
+export interface SuperBlockFeature {
+    id: string;
+    label: string;
+    caps: Capability[];
+    run: (ctx: SuperBlockCtx, config: Record<string, unknown>) => void;
+    configSchema?: ConfigField[];
+    defaultConfig?: Record<string, unknown>;
+    icon?: string;
+    pluginId?: string;
+}
+
+const features = new Map<string, SuperBlockFeature>();
+export const registerFeature = (def: SuperBlockFeature) => features.set(def.id, def);
+export const getFeature = (id: string): SuperBlockFeature | undefined => features.get(id);
+export const listFeatures = (): SuperBlockFeature[] => Array.from(features.values());
 
 // Lifecycle event bus (notes/09 SPI step 3). Plugins subscribe via the SPI's
 // on(); the runtime emits at mount/unmount/error/write/grant/render.
@@ -574,14 +605,12 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
 
 // Runs one super-block: builds the gated ctx, compiles the code once, executes it.
 // Errors are contained — a throwing block shows an inline message, never breaks the doc.
-export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string) => {
-    const preset = getPreset(kind) || PRESETS.calc;
-    // Idempotent re-render (Seq 4): if nothing that affects output changed
-    // (kind, code, policy) and the host is already mounted, skip the whole
-    // teardown+rerun. This avoids rebuilding an expensive nested editor (embed)
-    // on a no-op re-render. Policy is in the signature so a settings change still
-    // forces a re-run.
-    const signature = `${kind}\n${policySignature()}\n${code}`;
+export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, code: string, configRaw?: string) => {
+    // FEATURE mode if `kind` names a registered feature; else raw-code (preset) mode.
+    const feature = getFeature(kind);
+    // Idempotent re-render (Seq 4): signature covers everything that affects output —
+    // kind, policy, and either the config (feature mode) or the code (raw mode).
+    const signature = `${kind}\n${policySignature()}\n${feature ? (configRaw || "") : code}`;
     if (hostSignatures.get(host) === signature && host.childNodes.length > 0) {
         return;
     }
@@ -595,6 +624,34 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         host.textContent = `super-block (${kind}) — disabled by settings`;
         return;
     }
+    const finish = () => {
+        emit("render", {blockId, kind});
+        if (firstMount) {
+            emit("mounted", {blockId, kind});
+        }
+    };
+    if (feature) {
+        try {
+            const ctx = buildCtx(blockId, host, effectiveCaps(feature.caps));
+            let config: Record<string, unknown> = {...(feature.defaultConfig || {})};
+            if (configRaw) {
+                try {
+                    config = {...config, ...JSON.parse(configRaw)};
+                } catch {
+                    // bad config JSON — fall back to defaults
+                }
+            }
+            ctx.config = config;
+            feature.run(ctx, config);
+            finish();
+        } catch (e) {
+            host.textContent = `super-block error: ${(e as Error).message}`;
+            emit("error", {blockId, kind, detail: (e as Error).message});
+        }
+        return;
+    }
+    // Raw-code (preset) mode.
+    const preset = getPreset(kind) || PRESETS.calc;
     if (!code) {
         host.textContent = `super-block (${kind}) — no code`;
         return;
@@ -605,10 +662,7 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         const caps = effectiveCaps(preset.caps);
         const fn = compile(code);
         fn(buildCtx(blockId, host, caps));
-        emit("render", {blockId, kind});
-        if (firstMount) {
-            emit("mounted", {blockId, kind});
-        }
+        finish();
     } catch (e) {
         host.textContent = `super-block error: ${(e as Error).message}`;
         emit("error", {blockId, kind, detail: (e as Error).message});

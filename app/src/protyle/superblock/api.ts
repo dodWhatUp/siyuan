@@ -9,9 +9,10 @@
 import {
     registerPreset, registerCapability, getPreset, listPresets, onSuperBlockEvent,
     insertSuperBlock, updateSuperBlock, getSuperBlockState, setSuperBlockState, rerenderSuperBlock,
+    registerFeature, getFeature, listFeatures,
 } from "./runtime";
 
-export const SUPERBLOCK_API_VERSION = "0.1.0";
+export const SUPERBLOCK_API_VERSION = "0.2.0";
 
 // Idempotent: registers window.siyuan.superblock once, at app init (before
 // plugins load), so plugins can use it in their onload.
@@ -25,11 +26,14 @@ export const registerSuperBlockAPI = () => {
         // extension registry
         registerPreset,
         registerCapability,
+        registerFeature,
         // lifecycle
         on: onSuperBlockEvent,
         // introspection
         listPresets,
         getPreset,
+        listFeatures,
+        getFeature,
         // programmatic control
         insertSuperBlock,
         updateSuperBlock,

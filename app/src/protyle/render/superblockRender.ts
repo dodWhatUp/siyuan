@@ -123,11 +123,13 @@ export const superblockRender = (element: Element) => {
             host.setAttribute("contenteditable", "false");
             wrapper.insertBefore(host, wrapper.firstChild);
         }
-        // Defer running the block's code until it scrolls near the viewport.
+        // Defer running the block until it scrolls near the viewport. `config`
+        // (custom-sb-config) drives FEATURE mode; `code` drives raw-code mode.
         const code = block.getAttribute(SB_CODE) || "";
+        const config = block.getAttribute("custom-sb-config") || "";
         const blockId = block.getAttribute("data-node-id") || "";
         const runHost = host;
-        pendingMounts.set(block, () => runSuperBlock(runHost, blockId, kind, code));
+        pendingMounts.set(block, () => runSuperBlock(runHost, blockId, kind, code, config));
         getObserver().observe(block);
     });
 };
