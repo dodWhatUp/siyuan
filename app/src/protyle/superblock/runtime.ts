@@ -15,7 +15,7 @@ import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
 import {addScript} from "../util/addScript";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -45,6 +45,11 @@ export interface SuperBlockCtx {
     // allowlisted library from CDN (cached per session) and resolves to its
     // global, e.g. `const Chart = await ctx.require("chartjs")`.
     require?: (name: string) => Promise<unknown>;
+    // present only when the "timers" capability is enabled. Like the globals, but
+    // tracked and auto-cleared on unmount/re-render (no leaked intervals).
+    setInterval?: (handler: () => void, ms: number) => number;
+    setTimeout?: (handler: () => void, ms: number) => number;
+    onUnmount?: (cb: () => void) => void;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -58,7 +63,8 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     data: {caps: ["compute", "ui", "persist"]},
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs"]},
+    live: {caps: ["compute", "ui", "timers"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers"]},
 };
 
 // Allowlisted libraries for ctx.require — pinned CDN builds and the global each
@@ -69,26 +75,50 @@ const LIB_ALLOW: Record<string, {url: string; global: string}> = {
     dayjs: {url: "https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.10/dayjs.min.js", global: "dayjs"},
 };
 
-// Nested Protyle editors mounted by ctx.embed, tracked per host so they can be
-// destroyed before the host is cleared on re-render (avoids leaked WS listeners).
-const nestedEditors = new WeakMap<HTMLElement, Array<{destroy: () => void}>>();
+// Per-host disposables: everything a block mounts that must be torn down when the
+// block re-renders or is removed — nested editors (embed), timers, and explicit
+// onUnmount callbacks. One registry keeps teardown in a single place.
+interface HostDisposables {
+    editors: Array<{destroy: () => void}>;
+    timers: number[];
+    unmounts: Array<() => void>;
+}
+const hostDisposables = new WeakMap<HTMLElement, HostDisposables>();
+const getDisposables = (host: HTMLElement): HostDisposables => {
+    let d = hostDisposables.get(host);
+    if (!d) {
+        d = {editors: [], timers: [], unmounts: []};
+        hostDisposables.set(host, d);
+    }
+    return d;
+};
 
-// Destroy any nested editors mounted into `host` (releases their WebSocket /
-// listeners instead of orphaning them in memory). Called on re-render and, via
+// Tear down everything a block mounted into `host`. Called on re-render and, via
 // the removal observer in superblockRender, when a super-block is deleted (P9).
 export const disposeSuperBlock = (host: HTMLElement) => {
-    const nested = nestedEditors.get(host);
-    if (!nested) {
+    const d = hostDisposables.get(host);
+    if (!d) {
         return;
     }
-    nested.forEach((p) => {
+    d.timers.forEach((t) => {
+        clearTimeout(t);
+        clearInterval(t);
+    });
+    d.unmounts.forEach((cb) => {
+        try {
+            cb();
+        } catch (e) {
+            // ignore teardown errors
+        }
+    });
+    d.editors.forEach((p) => {
         try {
             p.destroy();
         } catch (e) {
             // ignore teardown errors
         }
     });
-    nestedEditors.delete(host);
+    hostDisposables.delete(host);
 };
 
 const SB_STATE = "custom-sb-state";
@@ -246,12 +276,23 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
                 action: [Constants.CB_GET_ALL],
                 render: {background: false, title: false, gutter: true, scroll: false, breadcrumb: true},
             });
-            let list = nestedEditors.get(host);
-            if (!list) {
-                list = [];
-                nestedEditors.set(host, list);
-            }
-            list.push(nested);
+            getDisposables(host).editors.push(nested);
+        };
+    }
+    if (caps.includes("timers")) {
+        const d = getDisposables(host);
+        ctx.setInterval = (handler: () => void, ms: number): number => {
+            const id = window.setInterval(handler, ms);
+            d.timers.push(id);
+            return id;
+        };
+        ctx.setTimeout = (handler: () => void, ms: number): number => {
+            const id = window.setTimeout(handler, ms);
+            d.timers.push(id);
+            return id;
+        };
+        ctx.onUnmount = (cb: () => void) => {
+            d.unmounts.push(cb);
         };
     }
     if (caps.includes("libs")) {
