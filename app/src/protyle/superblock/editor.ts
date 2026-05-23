@@ -287,7 +287,10 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
         .map((f) => `<option value="${f.id}"${f.id === kind ? " selected" : ""}>${escOpt(f.label)} — config</option>`)
         .join("");
     const presetOpts = listPresets()
-        .map((k) => `<option value="${k}"${k === kind ? " selected" : ""}>${k} — code</option>`)
+        .map((k) => {
+            const label = k === "app" ? "app — full access (all capabilities)" : `${k} — code`;
+            return `<option value="${k}"${k === kind ? " selected" : ""}>${label}</option>`;
+        })
         .join("");
     const options = (featureOpts ? `<optgroup label="Features (no-code)">${featureOpts}</optgroup>` : "")
         + `<optgroup label="Presets (code)">${presetOpts}</optgroup>`;

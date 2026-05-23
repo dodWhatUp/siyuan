@@ -74,6 +74,10 @@ export interface SuperBlockCtx {
         protyleClass: () => unknown;    // the Protyle editor constructor
         app: () => unknown;             // the SiYuan App instance
         getAllEditor: typeof getAllEditor;
+        // The whole super-block SPI (window.siyuan.superblock): registerFeature/
+        // registerProperty/registerCapability, insert/update/get|setState/rerender,
+        // listFeatures/Properties/Presets, and the view/reminder/ics/nl engines.
+        sb: unknown;
         // --- rich UI (native widgets) ---
         showMessage: typeof showMessage; // toast: showMessage("done"[, timeout, "info|error"])
         Dialog: typeof Dialog;           // modal dialog class: new ctx.siyuan.Dialog({title, content, …})
@@ -592,6 +596,7 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             protyleClass: () => { const e = getAllEditor()[0]; return e ? e.constructor : undefined; },  // Protyle ctor
             app: () => getAllEditor()[0]?.protyle?.app,                            // App instance
             getAllEditor,                                                          // all open editors
+            sb: (window.siyuan as unknown as {superblock?: unknown}).superblock,   // the full super-block SPI
             // Native UI widgets — show feedback without hand-rolling DOM:
             showMessage,   // toast notification
             Dialog,        // modal dialog (class)
