@@ -5,6 +5,22 @@
 import {registerFeature, SuperBlockCtx, getProperty} from "./runtime";
 import {applyView, ViewRecord, ViewConfig} from "./viewEngine";
 import {ReminderScheduler} from "./reminderScheduler";
+import {icsFromRows} from "./icsExport";
+
+// Trigger a client-side text download (browser only; no-ops if unavailable).
+const downloadText = (filename: string, text: string, mime = "text/calendar") => {
+    try {
+        const blob = new Blob([text], {type: mime});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { console.warn("[superblock] .ics download failed", e); }
+};
 
 // Start a reminder scheduler for a reminder-configured database; auto-stops on
 // unmount (needs the "timers" cap for ctx.onUnmount). Notifications fire as each
@@ -331,6 +347,7 @@ const renderRangeGrid = (
 const renderCalendar = (
     container: HTMLElement, items: CalItem[], avId: string, dateKey: string,
     ctx: SuperBlockCtx, dataRerender: () => void, state: CalState, reminderKey?: string,
+    onExport?: () => void,
 ) => {
     if (!state.anchor) { state.anchor = items.length ? items[0].ts : Date.now(); }
     const shift = (dir: number) => {
@@ -373,6 +390,14 @@ const renderCalendar = (
         next.onclick = () => shift(1);
         bar.appendChild(prev);
         bar.appendChild(next);
+        if (onExport) {
+            const exp = document.createElement("button");
+            exp.textContent = "⤓ .ics";
+            exp.title = "Export tasks to an .ics calendar file";
+            exp.className = "b3-button b3-button--outline";
+            exp.onclick = onExport;
+            bar.appendChild(exp);
+        }
         container.appendChild(bar);
         const body = document.createElement("div");
         container.appendChild(body);
@@ -409,7 +434,9 @@ const calendarRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const render = () => {
         ctx.av!.read(avId).then((view) => {
             el.innerHTML = "";
-            renderCalendar(el, buildCalItems(view.rows as AvRow[], dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey);
+            const rows = view.rows as AvRow[];
+            renderCalendar(el, buildCalItems(rows, dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey,
+                () => downloadText("tasks.ics", icsFromRows(rows as Parameters<typeof icsFromRows>[0], dateKey, reminderKey, "SiYuan Tasks")));
         }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
     };
     render();
@@ -449,7 +476,8 @@ const dbRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
             el.appendChild(body);
             if (active === "calendar") {
                 if (!dateKey) { body.textContent = "Calendar view needs a date column (set it in settings)."; return; }
-                renderCalendar(body, buildCalItems(rows, dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey);
+                renderCalendar(body, buildCalItems(rows, dateKey, reminderKey), avId, dateKey, ctx, render, calState, reminderKey,
+                    () => downloadText("tasks.ics", icsFromRows(rows as Parameters<typeof icsFromRows>[0], dateKey, reminderKey, "SiYuan Tasks")));
                 return;
             }
             const table = document.createElement("table");
