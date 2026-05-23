@@ -323,7 +323,15 @@ const scheduleStateWrite = (blockId: string, json: string) => {
 // User code is compiled as an ASYNC function body, so top-level `await` works
 // (e.g. `const r = await ctx.siyuan.api("/api/...")`). Errors surface as a rejected
 // promise, handled at the call site.
-const AsyncFunction = Object.getPrototypeOf(async () => { /* noop */ }).constructor as
+//
+// IMPORTANT: derive the AsyncFunction constructor from a RUNTIME STRING, not a
+// literal like `async () => {}`. The bundler down-levels async literals in our
+// source to plain functions, so `(async()=>{}).constructor` would resolve to the
+// ordinary Function — and `await` in user code would be a SyntaxError again. The
+// string below is parsed natively by the browser at runtime (never transpiled), so
+// it yields the genuine AsyncFunction constructor.
+// eslint-disable-next-line no-new-func
+const AsyncFunction = (Function("return (async function(){}).constructor")()) as
     new (arg: string, body: string) => (ctx: SuperBlockCtx) => Promise<void>;
 const compiled = new Map<string, (ctx: SuperBlockCtx) => Promise<void> | void>();
 const compile = (code: string): (ctx: SuperBlockCtx) => Promise<void> | void => {
