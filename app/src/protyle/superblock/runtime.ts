@@ -93,6 +93,10 @@ export interface SuperBlockCtx {
     // allowlisted library from CDN (cached per session) and resolves to its
     // global, e.g. `const Chart = await ctx.require("chartjs")`.
     require?: (name: string) => Promise<unknown>;
+    // present with the "libs" capability. Loads ANY ES module by URL (e.g.
+    // "https://esm.sh/lodash") and resolves to its namespace object — unlocks the
+    // whole library ecosystem. Cached per URL. (Runs remote code; treat as trusted.)
+    import?: (url: string) => Promise<Record<string, unknown>>;
     // present with the "cron" capability. Schedules a background repeat on a human
     // interval ("30s", "5m", "1h", "1h30m", "2d", or ms). Runs regardless of the
     // block's scroll position; auto-cleared on unmount/removal. Returns a cancel fn.
@@ -272,6 +276,32 @@ const emit = (event: SuperBlockEvent, data: SuperBlockEventData) => {
 
 // Allowlisted libraries for ctx.require — pinned CDN builds and the global each
 // one exposes. The allowlist IS the control: a block can only load these.
+// Load ANY ES module by URL via an injected module-script (handles absolute URLs +
+// the module's own deps; cached per URL). Resolves to the module's namespace object,
+// e.g. lodash from esm.sh → use `.default`. Runs remote code — treat as trusted.
+const esmCache = new Map<string, Promise<Record<string, unknown>>>();
+const importEsm = (url: string): Promise<Record<string, unknown>> => {
+    const cached = esmCache.get(url);
+    if (cached) { return cached; }
+    const p = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const w = window as unknown as Record<string, unknown>;
+        const cb = "__sbimp" + Math.random().toString(36).slice(2);
+        const s = document.createElement("script");
+        const timer = window.setTimeout(() => { reject(new Error("import timed out: " + url)); cleanup(); }, 20000);
+        const cleanup = () => { clearTimeout(timer); delete w[cb]; s.remove(); };
+        w[cb] = (m: Record<string, unknown> | null, err: string | null) => {
+            if (err) { reject(new Error("import failed: " + url + " — " + err)); }
+            else { resolve(m || {}); }
+            cleanup();
+        };
+        s.type = "module";
+        s.textContent = `import(${JSON.stringify(url)}).then(m=>window[${JSON.stringify(cb)}](m,null)).catch(e=>window[${JSON.stringify(cb)}](null,String((e&&e.message)||e)));`;
+        document.head.appendChild(s);
+    });
+    esmCache.set(url, p);
+    return p;
+};
+
 const LIB_ALLOW: Record<string, {url: string; global: string}> = {
     chartjs: {url: "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", global: "Chart"},
     d3: {url: "https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js", global: "d3"},
@@ -881,6 +911,7 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             return addScript(lib.url, `sb-lib-${name}`)
                 .then(() => (window as unknown as Record<string, unknown>)[lib.global]);
         };
+        ctx.import = (url: string) => importEsm(url);
     }],
 ]);
 
