@@ -74,6 +74,10 @@ export class App {
                     this.plugins.forEach((plugin) => {
                         plugin.eventBus.emit("ws-main", data);
                     });
+                    // Super-block fork: re-broadcast WS messages as a DOM event so
+                    // non-plugin code (super-block ctx.watch) can react to data
+                    // changes without registering a plugin.
+                    document.dispatchEvent(new CustomEvent("sb-ws-main", {detail: data}));
                     if (data) {
                         switch (data.cmd) {
                             case "logoutAuth":

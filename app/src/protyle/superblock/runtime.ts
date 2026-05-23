@@ -15,7 +15,7 @@ import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
 import {addScript} from "../util/addScript";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -50,6 +50,10 @@ export interface SuperBlockCtx {
     setInterval?: (handler: () => void, ms: number) => number;
     setTimeout?: (handler: () => void, ms: number) => number;
     onUnmount?: (cb: () => void) => void;
+    // present only when the "watch" capability is enabled. Calls `cb` (debounced)
+    // whenever the vault changes (any kernel WS message), so a query-view block
+    // can refresh itself live. Auto-unsubscribed on unmount.
+    watch?: (cb: () => void) => void;
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -64,7 +68,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch"]},
 };
 
 // Allowlisted libraries for ctx.require — pinned CDN builds and the global each
@@ -295,6 +299,21 @@ const buildCtx = (blockId: string, host: HTMLElement, caps: Capability[]): Super
         };
         ctx.onUnmount = (cb: () => void) => {
             d.unmounts.push(cb);
+        };
+    }
+    if (caps.includes("watch")) {
+        ctx.watch = (cb: () => void) => {
+            const d = getDisposables(host);
+            let timer = 0;
+            const handler = () => {
+                clearTimeout(timer);
+                timer = window.setTimeout(cb, 500); // debounce bursts of changes
+            };
+            document.addEventListener("sb-ws-main", handler);
+            d.unmounts.push(() => {
+                document.removeEventListener("sb-ws-main", handler);
+                clearTimeout(timer);
+            });
         };
     }
     if (caps.includes("libs")) {
