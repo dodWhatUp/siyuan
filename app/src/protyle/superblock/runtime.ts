@@ -88,6 +88,30 @@ export const listPresets = (): string[] => {
     return ids;
 };
 
+// Lifecycle event bus (notes/09 SPI step 3). Plugins subscribe via the SPI's
+// on(); the runtime emits at mount/unmount/error/write/grant/render.
+export type SuperBlockEvent = "mounted" | "unmounted" | "error" | "write" | "grant" | "render";
+export interface SuperBlockEventData { blockId: string; kind?: string; detail?: unknown; }
+const eventListeners = new Map<SuperBlockEvent, Set<(e: SuperBlockEventData) => void>>();
+export const onSuperBlockEvent = (event: SuperBlockEvent, handler: (e: SuperBlockEventData) => void): {dispose: () => void} => {
+    let set = eventListeners.get(event);
+    if (!set) {
+        set = new Set();
+        eventListeners.set(event, set);
+    }
+    set.add(handler);
+    return {dispose: () => { set!.delete(handler); }};
+};
+const emit = (event: SuperBlockEvent, data: SuperBlockEventData) => {
+    eventListeners.get(event)?.forEach((h) => {
+        try {
+            h(data);
+        } catch (e) {
+            // a faulty listener must not break the runtime
+        }
+    });
+};
+
 // Allowlisted libraries for ctx.require — pinned CDN builds and the global each
 // one exposes. The allowlist IS the control: a block can only load these.
 const LIB_ALLOW: Record<string, {url: string; global: string}> = {
@@ -142,6 +166,15 @@ export const disposeSuperBlock = (host: HTMLElement) => {
         }
     });
     hostDisposables.delete(host);
+};
+
+// Emit "unmounted" for a host that was genuinely removed from the doc. Called by
+// the removal observer (true deletion) — NOT by disposeSuperBlock, which also
+// runs on re-render teardown. So "unmounted" reliably means gone, not re-rendered,
+// and fires even for blocks that had no disposables.
+export const emitUnmounted = (host: HTMLElement) => {
+    const blockId = host.closest("[data-node-id]")?.getAttribute("data-node-id") || "";
+    emit("unmounted", {blockId});
 };
 
 const SB_STATE = "custom-sb-state";
@@ -217,6 +250,7 @@ const ensureGrant = (blockId: string, label: string, desc: string): Promise<bool
             `Allow? (remembered on this device)`,
             () => {
                 addGrant(blockId, label);
+                emit("grant", {blockId, detail: {label}});
                 resolve(true);
             },
             () => resolve(false),
@@ -283,8 +317,9 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
             if (!(await ensureGrant(blockId, "write", "modify your vault (write to the kernel)"))) {
                 throw new Error("write: denied by user");
             }
-            // Audit: every write a block performs is logged.
+            // Audit: every write a block performs is logged + emitted.
             console.log("[super-block write]", blockId.slice(-6), path, body);
+            emit("write", {blockId, detail: {path}});
             return fetchSyncPost(path, body || {});
         };
     }],
@@ -407,6 +442,7 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
     if (hostSignatures.get(host) === signature && host.childNodes.length > 0) {
         return;
     }
+    const firstMount = !hostSignatures.has(host);
     hostSignatures.set(host, signature);
     // Destroy any nested editors from a previous mount before clearing the host.
     disposeSuperBlock(host);
@@ -426,7 +462,12 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         const caps = effectiveCaps(preset.caps);
         const fn = compile(code);
         fn(buildCtx(blockId, host, caps));
+        emit("render", {blockId, kind});
+        if (firstMount) {
+            emit("mounted", {blockId, kind});
+        }
     } catch (e) {
         host.textContent = `super-block error: ${(e as Error).message}`;
+        emit("error", {blockId, kind, detail: (e as Error).message});
     }
 };

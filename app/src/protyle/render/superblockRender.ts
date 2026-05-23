@@ -11,7 +11,7 @@
 // recursion (super-blocks nested inside an embed), and dispose nested editors
 // when a block is removed.
 
-import {runSuperBlock, disposeSuperBlock} from "../superblock/runtime";
+import {runSuperBlock, disposeSuperBlock, emitUnmounted} from "../superblock/runtime";
 
 export const SB_MARKER = "custom-sb-kind";
 export const SB_CODE = "custom-sb-code";
@@ -47,6 +47,7 @@ const ensureRemovalObserver = () => {
             candidates.forEach((h) => {
                 if (!h.isConnected) {
                     disposeSuperBlock(h);
+                    emitUnmounted(h);
                 }
             });
         }, 0);
