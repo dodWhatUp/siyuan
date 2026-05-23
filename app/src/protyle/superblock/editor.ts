@@ -3,18 +3,116 @@
 // A minimal in-app editor. Opens a dialog with the block's current code
 // (custom-sb-code) and a preset/kind picker (custom-sb-kind), lets the user edit
 // both, and on Save persists via setBlockAttrs and re-renders the block through
-// the runtime. Undo of code edits is not wired yet (setBlockAttrs bypasses the
-// host doc's undo stack) — noted for a later step; a fuller editor (syntax
-// highlight, cost meter) also comes later.
+// the runtime. The textarea is layered over a highlight.js-painted <pre> for
+// syntax highlighting (the textarea keeps native editing/caret/undo; the <pre>
+// just paints colors behind it). Undo of code edits is not wired into the host
+// doc's undo stack yet (setBlockAttrs bypasses it).
 
 import {Dialog} from "../../dialog";
 import {fetchPost} from "../../util/fetch";
 import {superblockRender} from "../render/superblockRender";
 import {PRESETS} from "./runtime";
+import {addScript} from "../util/addScript";
+import {setCodeTheme} from "../render/util";
+import {Constants} from "../../constants";
 
 const capsHint = (kind: string): string => {
     const preset = PRESETS[kind];
     return preset ? `capabilities: ${preset.caps.join(", ")}` : "unknown preset";
+};
+
+// Style props shared by the textarea and the highlight <pre> so they overlap
+// pixel-for-pixel. Any divergence (padding, line-height, font) would misalign
+// the painted colors from the typed text.
+const SHARED_STYLE: Partial<CSSStyleDeclaration> = {
+    margin: "0",
+    border: "0",
+    padding: "8px",
+    width: "100%",
+    height: "240px",
+    boxSizing: "border-box",
+    fontFamily: "var(--b3-font-family-code, monospace)",
+    fontSize: "85%",
+    lineHeight: "1.5",
+    whiteSpace: "pre",
+    tabSize: "2",
+    overflow: "auto",
+};
+
+// Layer a highlight.js <pre> behind `textarea`, scroll-synced. Returns a render()
+// to re-highlight. Degrades gracefully: if hljs fails to load, the textarea still
+// works, just without colors.
+const attachHighlight = (textarea: HTMLTextAreaElement) => {
+    const parent = textarea.parentElement as HTMLElement;
+    const wrap = document.createElement("div");
+    wrap.className = "b3-text-field fn__block";
+    wrap.style.position = "relative";
+    wrap.style.padding = "0";
+    wrap.style.resize = "vertical";
+    wrap.style.overflow = "hidden";
+    parent.insertBefore(wrap, textarea);
+
+    const pre = document.createElement("pre");
+    pre.className = "hljs";
+    pre.setAttribute("aria-hidden", "true");
+    const codeEl = document.createElement("code");
+    pre.appendChild(codeEl);
+
+    Object.assign(pre.style, SHARED_STYLE);
+    pre.style.position = "absolute";
+    pre.style.inset = "0";
+    pre.style.pointerEvents = "none";
+    pre.style.background = "transparent";
+
+    wrap.appendChild(pre);
+    wrap.appendChild(textarea);
+
+    // The textarea sits on top with invisible text but a visible caret, so the
+    // colors from the <pre> show through.
+    Object.assign(textarea.style, SHARED_STYLE);
+    textarea.style.position = "relative";
+    textarea.style.background = "transparent";
+    textarea.style.color = "transparent";
+    textarea.style.caretColor = "var(--b3-theme-on-background)";
+    textarea.classList.remove("b3-text-field");
+
+    const render = () => {
+        if (!window.hljs) {
+            return;
+        }
+        // Trailing newline needs a filler char or the last line height is lost.
+        const value = textarea.value.endsWith("\n") ? textarea.value + " " : textarea.value;
+        try {
+            codeEl.innerHTML = window.hljs.highlight(value, {language: "javascript"}).value;
+        } catch (e) {
+            codeEl.textContent = value;
+        }
+        pre.scrollTop = textarea.scrollTop;
+        pre.scrollLeft = textarea.scrollLeft;
+    };
+
+    textarea.addEventListener("input", render);
+    textarea.addEventListener("scroll", () => {
+        pre.scrollTop = textarea.scrollTop;
+        pre.scrollLeft = textarea.scrollLeft;
+    });
+    // Tab inserts two spaces instead of leaving the field.
+    textarea.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") {
+            return;
+        }
+        event.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.value = textarea.value.slice(0, start) + "  " + textarea.value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start + 2;
+        render();
+    });
+
+    // Load hljs (+ theme) then do the first paint; textarea is usable meanwhile.
+    setCodeTheme(Constants.PROTYLE_CDN);
+    addScript(`${Constants.PROTYLE_CDN}/js/highlight.js/highlight.min.js?v=11.11.1`, "protyleHljsScript").then(render);
+    render();
 };
 
 export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
@@ -38,7 +136,7 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
         <span class="ft__smaller ft__on-surface fn__flex-1" id="sbCapsHint">${capsHint(kind)}</span>
     </div>
     <div class="ft__smaller ft__on-surface" style="margin-bottom: 8px">Code runs with <code class="fn__code">ctx</code> in scope (<code class="fn__code">ctx.el</code> = the block element).</div>
-    <textarea class="b3-text-field fn__block" spellcheck="false" style="height: 240px; resize: vertical; font-family: var(--b3-font-family-code, monospace); white-space: pre; tab-size: 2"></textarea>
+    <textarea spellcheck="false"></textarea>
 </div>
 <div class="b3-dialog__action">
     <button class="b3-button b3-button--cancel">Cancel</button>
@@ -49,6 +147,7 @@ export const openSuperBlockEditor = (nodeElement: HTMLElement) => {
 
     const textarea = dialog.element.querySelector("textarea") as HTMLTextAreaElement;
     textarea.value = code;
+    attachHighlight(textarea);
     textarea.focus();
 
     // Keep the capability hint in sync with the chosen preset.
