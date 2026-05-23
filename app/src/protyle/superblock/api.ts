@@ -10,11 +10,13 @@ import {
     registerPreset, registerCapability, getPreset, listPresets, onSuperBlockEvent,
     insertSuperBlock, updateSuperBlock, getSuperBlockState, setSuperBlockState, rerenderSuperBlock,
     registerFeature, getFeature, listFeatures,
+    registerProperty, getProperty, listProperties,
 } from "./runtime";
 import {applyFilter, applySort, applyGroup, applyManualOrder, applyView} from "./viewEngine";
 import {registerBuiltinFeatures} from "./builtinFeatures";
+import {registerBuiltinProperties} from "./builtinProperties";
 
-export const SUPERBLOCK_API_VERSION = "0.2.0";
+export const SUPERBLOCK_API_VERSION = "0.3.0";
 
 // Idempotent: registers window.siyuan.superblock once, at app init (before
 // plugins load), so plugins can use it in their onload.
@@ -29,6 +31,7 @@ export const registerSuperBlockAPI = () => {
         registerPreset,
         registerCapability,
         registerFeature,
+        registerProperty,
         // lifecycle
         on: onSuperBlockEvent,
         // introspection
@@ -36,6 +39,8 @@ export const registerSuperBlockAPI = () => {
         getPreset,
         listFeatures,
         getFeature,
+        listProperties,
+        getProperty,
         // programmatic control
         insertSuperBlock,
         updateSuperBlock,
@@ -47,4 +52,6 @@ export const registerSuperBlockAPI = () => {
     };
     // Register the core built-in features (query, …) so they're available by default.
     registerBuiltinFeatures();
+    // Register the core built-in property components (reminder, …).
+    registerBuiltinProperties();
 };
