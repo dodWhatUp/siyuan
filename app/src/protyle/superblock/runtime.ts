@@ -14,6 +14,8 @@ import {effectiveCaps, isKilled, hasGrant, addGrant, policySignature} from "./po
 import {getAllEditor} from "../../layout/getAll";
 import {Constants} from "../../constants";
 import {addScript} from "../util/addScript";
+import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
+import {genIconHTML} from "../render/util";
 
 export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write";
 
@@ -469,5 +471,80 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
     } catch (e) {
         host.textContent = `super-block error: ${(e as Error).message}`;
         emit("error", {blockId, kind, detail: (e as Error).message});
+    }
+};
+
+// --- Programmatic control (notes/09 SPI step 4) -----------------------------
+// Lets a plugin create and drive super-blocks without the editor UI.
+
+const findSuperBlock = (blockId: string): HTMLElement | null =>
+    document.querySelector(`[data-node-id="${blockId}"][data-type="NodeHTMLBlock"]`);
+
+export const rerenderSuperBlock = (blockId: string) => {
+    const el = findSuperBlock(blockId);
+    if (el) {
+        el.removeAttribute("data-sb-rendered");
+        superblockRender(el);
+    }
+};
+
+// Insert a new super-block under `parentId`; resolves to the new block id.
+export const insertSuperBlock = async (
+    opts: {parentId: string; kind: string; code: string; state?: object},
+): Promise<string> => {
+    const nodeId = Lute.NewNodeID();
+    const escCode = Lute.EscapeHTMLStr(opts.code);
+    const stateAttr = opts.state
+        ? ` ${SB_STATE}="${Lute.EscapeHTMLStr(JSON.stringify(opts.state))}"`
+        : "";
+    const dom = `<div data-node-id="${nodeId}" data-type="NodeHTMLBlock" class="render-node" data-subtype="block" ${SB_MARKER}="${opts.kind}" ${SB_CODE}="${escCode}"${stateAttr}>${genIconHTML()}<div><protyle-html data-content=""></protyle-html><span style="position: absolute">${Constants.ZWSP}</span></div><div class="protyle-attr" contenteditable="false"></div></div>`;
+    const res = await fetchSyncPost("/api/block/insertBlock", {dataType: "dom", data: dom, parentID: opts.parentId});
+    try {
+        return (res.data[0].doOperations[0].id as string) || nodeId;
+    } catch {
+        return nodeId;
+    }
+};
+
+// Update a super-block's preset/code, persist, and re-render in place.
+export const updateSuperBlock = async (blockId: string, patch: {kind?: string; code?: string}): Promise<void> => {
+    const attrs: Record<string, string> = {};
+    if (patch.kind !== undefined) {
+        attrs[SB_MARKER] = patch.kind;
+    }
+    if (patch.code !== undefined) {
+        attrs[SB_CODE] = patch.code;
+    }
+    if (Object.keys(attrs).length === 0) {
+        return;
+    }
+    await fetchSyncPost("/api/attr/setBlockAttrs", {id: blockId, attrs});
+    const el = findSuperBlock(blockId);
+    if (el) {
+        Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k]));
+        rerenderSuperBlock(blockId);
+    }
+};
+
+export const getSuperBlockState = async (blockId: string): Promise<Record<string, unknown>> => {
+    const res = await fetchSyncPost("/api/attr/getBlockAttrs", {id: blockId});
+    const raw = (res?.data as Record<string, string> | undefined)?.[SB_STATE];
+    if (!raw) {
+        return {};
+    }
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return {};
+    }
+};
+
+export const setSuperBlockState = async (blockId: string, state: Record<string, unknown>): Promise<void> => {
+    const json = JSON.stringify(state);
+    await fetchSyncPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[SB_STATE]: json}});
+    const el = findSuperBlock(blockId);
+    if (el) {
+        el.setAttribute(SB_STATE, json);
+        rerenderSuperBlock(blockId);
     }
 };
