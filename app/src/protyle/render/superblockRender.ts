@@ -14,6 +14,32 @@ import {runSuperBlock} from "../superblock/runtime";
 export const SB_MARKER = "custom-sb-kind";
 export const SB_CODE = "custom-sb-code";
 
+// Lazy-mount (step 6b): a super-block's code runs only when the block scrolls
+// near the viewport, so a long doc with many super-blocks doesn't execute every
+// one up-front. One shared IntersectionObserver serves all blocks (cheaper than
+// an observer per block); each block's deferred mount is stored in a WeakMap.
+let observer: IntersectionObserver | null = null;
+const pendingMounts = new WeakMap<Element, () => void>();
+
+const getObserver = (): IntersectionObserver => {
+    if (!observer) {
+        observer = new IntersectionObserver((entries, obs) => {
+            entries.forEach((entry) => {
+                if (!entry.isIntersecting) {
+                    return;
+                }
+                const mount = pendingMounts.get(entry.target);
+                if (mount) {
+                    pendingMounts.delete(entry.target);
+                    obs.unobserve(entry.target);
+                    mount();
+                }
+            });
+        }, {rootMargin: "200px"}); // pre-mount slightly before the block is visible
+    }
+    return observer;
+};
+
 export const superblockRender = (element: Element) => {
     let blocks: Element[] | NodeListOf<Element>;
     if (element.getAttribute("data-type") === "NodeHTMLBlock" && element.hasAttribute(SB_MARKER)) {
@@ -49,9 +75,11 @@ export const superblockRender = (element: Element) => {
             host.setAttribute("contenteditable", "false");
             wrapper.insertBefore(host, wrapper.firstChild);
         }
-        // Run the block's code through the capability-gated runtime.
+        // Defer running the block's code until it scrolls near the viewport.
         const code = block.getAttribute(SB_CODE) || "";
         const blockId = block.getAttribute("data-node-id") || "";
-        runSuperBlock(host, blockId, kind, code);
+        const runHost = host;
+        pendingMounts.set(block, () => runSuperBlock(runHost, blockId, kind, code));
+        getObserver().observe(block);
     });
 };

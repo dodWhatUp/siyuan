@@ -49,6 +49,24 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
 
 const SB_STATE = "custom-sb-state";
 
+// Compile-once cache (step 6a): a block's code is turned into a Function once and
+// reused across re-renders/reloads of the same source. Keyed by the code string,
+// so identical code (common when the same preset is used repeatedly) compiles
+// once. Capped to avoid unbounded growth as code is edited.
+const compiled = new Map<string, (ctx: SuperBlockCtx) => void>();
+const compile = (code: string): (ctx: SuperBlockCtx) => void => {
+    let fn = compiled.get(code);
+    if (!fn) {
+        if (compiled.size > 200) {
+            compiled.clear();
+        }
+        // eslint-disable-next-line no-new-func
+        fn = new Function("ctx", code) as (ctx: SuperBlockCtx) => void;
+        compiled.set(code, fn);
+    }
+    return fn;
+};
+
 // Read-only kernel endpoints a super-block may call via ctx.api.post. Anything
 // that mutates the vault is intentionally excluded — block code should not be
 // able to silently rewrite other blocks.
@@ -161,8 +179,7 @@ export const runSuperBlock = (host: HTMLElement, blockId: string, kind: string, 
         // Drop globally-disabled capabilities before building ctx, so a disabled
         // cap is simply absent (gating by omission) rather than confirm-gated.
         const caps = effectiveCaps(preset.caps);
-        // eslint-disable-next-line no-new-func
-        const fn = new Function("ctx", code);
+        const fn = compile(code);
         fn(buildCtx(blockId, host, caps));
     } catch (e) {
         host.textContent = `super-block error: ${(e as Error).message}`;
