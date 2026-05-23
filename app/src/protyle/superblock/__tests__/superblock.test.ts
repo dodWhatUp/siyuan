@@ -173,6 +173,22 @@ export async function run(): Promise<void> {
         const headers = Array.from(boardCtx.el.querySelectorAll("div")).filter((d) =>
             /\(\d+\)\s*$/.test(d.textContent || "") && (d as HTMLElement).style.fontWeight === "bold");
         ok("board.columns", headers.length === 2);
+
+        // search grouping: groupBy renders collapsible <details> groups with counts
+        const qCtx = {
+            el: document.createElement("div"),
+            api: {post: async () => ({data: [
+                {id: "r1", status: "Todo", title: "A"},
+                {id: "r2", status: "Doing", title: "B"},
+                {id: "r3", status: "Todo", title: "C"},
+            ]})},
+            watch: () => {},
+        };
+        __features.get("query")!.run(qCtx, {source: "sql", query: "x", mode: "list", groupBy: "status"});
+        await tick();
+        const summaries = Array.from(qCtx.el.querySelectorAll("summary")).map((s) => (s.textContent || "").replace(/\s+/g, " ").trim());
+        ok("search.group.sections", qCtx.el.querySelectorAll("details").length === 2);
+        ok("search.group.counts", summaries.includes("Todo (2)") && summaries.includes("Doing (1)"));
     }
 
     // ---- search: full-text result mapping -------------------------------

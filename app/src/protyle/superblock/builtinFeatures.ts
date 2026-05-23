@@ -52,8 +52,46 @@ const FT_DEFAULT_TYPES = {
     mathBlock: true, table: true, blockquote: true, superBlock: true, paragraph: true,
 };
 
+// Render a flat record list into `container` as a table or bulleted list.
+const renderRecordList = (container: HTMLElement, list: ViewRecord[], mode: string) => {
+    if (!list.length) { return; }
+    const cols = Object.keys(list[0].values);
+    if (mode === "list") {
+        const ul = document.createElement("ul");
+        list.forEach((rec) => {
+            const li = document.createElement("li");
+            li.textContent = String(rec.values[cols[0]] ?? "");
+            ul.appendChild(li);
+        });
+        container.appendChild(ul);
+        return;
+    }
+    const table = document.createElement("table");
+    table.style.cssText = "border-collapse:collapse;font-size:12px";
+    const head = document.createElement("tr");
+    cols.forEach((c) => {
+        const th = document.createElement("th");
+        th.textContent = c;
+        th.style.cssText = "border:1px solid var(--b3-border-color);padding:2px 6px;text-align:left";
+        head.appendChild(th);
+    });
+    table.appendChild(head);
+    list.forEach((rec) => {
+        const tr = document.createElement("tr");
+        cols.forEach((c) => {
+            const td = document.createElement("td");
+            td.textContent = String(rec.values[c] ?? "");
+            td.style.cssText = "border:1px solid var(--b3-border-color);padding:2px 6px";
+            tr.appendChild(td);
+        });
+        table.appendChild(tr);
+    });
+    container.appendChild(table);
+};
+
 // Query / Search: a SQL query OR a full-text search (config.source), rendered as
-// table|list through the shared view engine (filter/sort/group). Gated api cap.
+// table|list through the shared view engine. With `groupBy` set, results render as
+// collapsible groups (Notion/Airtable style) with per-group counts. Gated api cap.
 const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     const el = ctx.el as HTMLElement;
     const source = String(cfg.source || "sql");
@@ -61,7 +99,8 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         ? ""
         : "SELECT content FROM blocks WHERE content != '' ORDER BY updated DESC LIMIT 10"));
     const mode = String(cfg.mode || "table");
-    const viewCfg = (cfg.view as ViewConfig) || {};
+    const viewCfg: ViewConfig = {...((cfg.view as ViewConfig) || {})};
+    if (cfg.groupBy) { viewCfg.group = String(cfg.groupBy); }   // no-code group-by field
     const fetchRecords = (): Promise<ViewRecord[]> => {
         if (source === "fulltext") {
             return ctx.api!.post!("/api/search/fullTextSearchBlock", {
@@ -76,43 +115,26 @@ const queryRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
         el.textContent = "loading…";
         fetchRecords().then((records: ViewRecord[]) => {
             const processed = applyView(records, viewCfg);
-            const list: ViewRecord[] = Array.isArray(processed)
-                ? processed
-                : ([] as ViewRecord[]).concat(...Object.values(processed));
             el.innerHTML = "";
-            if (list.length === 0) { el.textContent = "no results"; return; }
-            const cols = Object.keys(list[0].values);
-            if (mode === "list") {
-                const ul = document.createElement("ul");
-                list.forEach((rec) => {
-                    const li = document.createElement("li");
-                    li.textContent = String(rec.values[cols[0]] ?? "");
-                    ul.appendChild(li);
-                });
-                el.appendChild(ul);
-            } else {
-                const table = document.createElement("table");
-                table.style.cssText = "border-collapse:collapse;font-size:12px";
-                const head = document.createElement("tr");
-                cols.forEach((c) => {
-                    const th = document.createElement("th");
-                    th.textContent = c;
-                    th.style.cssText = "border:1px solid var(--b3-border-color);padding:2px 6px;text-align:left";
-                    head.appendChild(th);
-                });
-                table.appendChild(head);
-                list.forEach((rec) => {
-                    const tr = document.createElement("tr");
-                    cols.forEach((c) => {
-                        const td = document.createElement("td");
-                        td.textContent = String(rec.values[c] ?? "");
-                        td.style.cssText = "border:1px solid var(--b3-border-color);padding:2px 6px";
-                        tr.appendChild(td);
-                    });
-                    table.appendChild(tr);
-                });
-                el.appendChild(table);
+            if (Array.isArray(processed)) {
+                if (!processed.length) { el.textContent = "no results"; return; }
+                renderRecordList(el, processed, mode);
+                return;
             }
+            // grouped → collapsible <details> per group with a count
+            const keys = Object.keys(processed);
+            const total = keys.reduce((n, k) => n + processed[k].length, 0);
+            if (total === 0) { el.textContent = "no results"; return; }
+            keys.forEach((k) => {
+                const det = document.createElement("details");
+                det.open = true;
+                const sum = document.createElement("summary");
+                sum.textContent = `${k || "(empty)"}  (${processed[k].length})`;
+                sum.style.cssText = "cursor:pointer;font-weight:bold;font-size:12px;margin:4px 0";
+                det.appendChild(sum);
+                renderRecordList(det, processed[k], mode);
+                el.appendChild(det);
+            });
         }).catch((e: Error) => { el.textContent = "ERR: " + e.message; });
     };
     render();
@@ -704,6 +726,7 @@ export const registerBuiltinFeatures = () => {
             {key: "source", label: "Source", type: "select", options: [{value: "sql", label: "SQL"}, {value: "fulltext", label: "Full-text search"}]},
             {key: "query", label: "Query (SQL statement or search terms)", type: "code"},
             {key: "mode", label: "View", type: "select", options: [{value: "table", label: "Table"}, {value: "list", label: "List"}]},
+            {key: "groupBy", label: "Group by (column name, optional)", type: "text"},
         ],
         run: queryRun,
     });
