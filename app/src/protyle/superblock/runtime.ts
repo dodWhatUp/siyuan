@@ -20,6 +20,7 @@ import {Constants} from "../../constants";
 import {showMessage} from "../../dialog/message";
 import {Dialog} from "../../dialog/index";
 import {Menu} from "../../plugin/Menu";
+import {EventBus} from "../../plugin/EventBus";
 import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {parseEvery} from "./cron";
@@ -27,7 +28,7 @@ import {matchHotkey} from "./hotkey";
 import {storagePath} from "./storage";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -128,6 +129,10 @@ export interface SuperBlockCtx {
     // background Web Worker (off the main thread) with a structured-cloneable input,
     // resolving to its result. The fn can't use closures/DOM (it runs isolated).
     worker?: (fn: (input: unknown) => unknown, input?: unknown) => Promise<unknown>;
+    // present with the "events" capability. Subscribe to SiYuan frontend events
+    // ("ws-main", "switch-protyle", "loaded-protyle-static", "sync-end", …); the
+    // handler gets the CustomEvent (use e.detail). Auto-unsubscribed on unmount.
+    on?: (event: string, handler: (e: CustomEvent) => void) => () => void;
     // present only when the "timers" capability is enabled. Like the globals, but
     // tracked and auto-cleared on unmount/re-render (no leaked intervals).
     setInterval?: (handler: () => void, ms: number) => number;
@@ -185,7 +190,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -325,6 +330,25 @@ const hostDisposables = new WeakMap<HTMLElement, HostDisposables>();
 const hostSignatures = new WeakMap<HTMLElement, string>();
 // In-doc pub/sub channels for ctx.channel — name -> subscriber callbacks.
 const channelBus = new Map<string, Set<(data: unknown) => void>>();
+
+// Shared EventBus for the "events" capability. SiYuan emits frontend events to
+// every entry in window.siyuan.plugins[].eventBus, so we register one minimal
+// pseudo-plugin (lazily, once) whose bus super-block code can subscribe to. The
+// extra fields are kept defined so code iterating plugins won't choke on it.
+let sbEventBus: EventBus | null = null;
+const ensureSbEventBus = (): EventBus | null => {
+    if (sbEventBus) { return sbEventBus; }
+    const w = window.siyuan as unknown as {plugins?: Array<Record<string, unknown>>};
+    if (!w.plugins) { w.plugins = []; }   // SiYuan leaves this undefined when no plugins are installed
+    sbEventBus = new EventBus("__superblock-events__");
+    w.plugins.push({
+        name: "__superblock-events__", eventBus: sbEventBus,
+        commands: [], models: {}, topBarIcons: [], statusBarIcons: [], docks: {},
+        protyleSlash: [], protyleOptions: {}, setting: undefined, data: {},
+        onload: () => undefined, onunload: () => undefined, onLayoutReady: () => undefined, uninstall: () => undefined,
+    });
+    return sbEventBus;
+};
 const getDisposables = (host: HTMLElement): HostDisposables => {
     let d = hostDisposables.get(host);
     if (!d) {
@@ -725,6 +749,16 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
         ctx.clipboard = {
             writeText: (text: string) => navigator.clipboard.writeText(text),
             readText: () => navigator.clipboard.readText(),
+        };
+    }],
+    ["events", ({ctx, host}) => {
+        ctx.on = (event: string, handler: (e: CustomEvent) => void): (() => void) => {
+            const bus = ensureSbEventBus();
+            if (!bus) { return () => { /* no plugins host yet */ }; }
+            bus.on(event as never, handler as never);
+            const off = () => bus.off(event as never, handler as never);
+            getDisposables(host).unmounts.push(off);
+            return off;
         };
     }],
     ["worker", ({ctx, host}) => {
