@@ -230,6 +230,11 @@ export async function run(): Promise<void> {
         await tick();
         ok("search.embedmode.calls", embedded.length === 1 && embedded[0] === "20260101120000-abcdefg");
 
+        // raw HTML feature: injects unsanitized markup (scripts/iframes allowed)
+        const hCtx = {el: document.createElement("div"), watch: () => {}};
+        __features.get("html")!.run(hCtx, {html: "<b id='rawx'>hi</b><iframe src='about:blank'></iframe>"});
+        ok("html.injects", !!hCtx.el.querySelector("#rawx") && !!hCtx.el.querySelector("iframe"));
+
         // embed read-only: fetches the target's markdown into a static box
         const eCtx = {
             el: document.createElement("div"),

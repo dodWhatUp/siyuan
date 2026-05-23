@@ -19,7 +19,7 @@ import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -54,6 +54,19 @@ export interface SuperBlockCtx {
     // present with the "ui" capability. Opens a block in the current tab (focused)
     // or a new window — used by search results to make rows openable/editable.
     open?: (id: string, newWindow?: boolean) => void;
+    // present with the "siyuan" capability — a broad toolbox of SiYuan frontend
+    // abilities for power-user code/plugins: call ANY kernel API, open blocks, and
+    // reach the Protyle class / app / Lute / all editors.
+    siyuan?: {
+        api: (endpoint: string, data?: object) => Promise<IWebSocketData>;        // await any /api/* endpoint
+        apiCb: (endpoint: string, data: object, cb: (r: IWebSocketData) => void) => void;
+        openBlock: (id: string, newWindow?: boolean) => void;
+        constants: typeof Constants;
+        lute: () => unknown;            // the global Lute markdown engine
+        protyleClass: () => unknown;    // the Protyle editor constructor
+        app: () => unknown;             // the SiYuan App instance
+        getAllEditor: typeof getAllEditor;
+    };
     // present only when the "libs" capability is enabled. Lazy-loads an
     // allowlisted library from CDN (cached per session) and resolves to its
     // global, e.g. `const Chart = await ctx.require("chartjs")`.
@@ -115,7 +128,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -508,6 +521,24 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 frame.style.cssText = "width:100%;height:420px;border:1px solid var(--b3-border-color);border-radius:6px";
                 parent.appendChild(frame);
             });
+        };
+    }],
+    ["siyuan", ({ctx}) => {
+        const openBlock = (id: string, newWindow?: boolean) => {
+            if (!id) { return; }
+            if (newWindow) { openNewWindowById(id); return; }
+            const app = getAllEditor()[0]?.protyle?.app;
+            if (app) { openFileById({app, id, action: [Constants.CB_GET_FOCUS, Constants.CB_GET_HL]}); }
+        };
+        ctx.siyuan = {
+            api: (endpoint: string, data?: object) => fetchSyncPost(endpoint, data || {}),
+            apiCb: (endpoint: string, data: object, cb: (r: IWebSocketData) => void) => fetchPost(endpoint, data, cb),
+            openBlock,
+            constants: Constants,
+            lute: () => (window as unknown as {Lute?: unknown}).Lute,
+            protyleClass: () => { const e = getAllEditor()[0]; return e ? e.constructor : undefined; },
+            app: () => getAllEditor()[0]?.protyle?.app,
+            getAllEditor,
         };
     }],
     ["timers", ({ctx, host}) => {

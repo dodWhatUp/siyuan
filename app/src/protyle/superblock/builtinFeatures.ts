@@ -835,6 +835,22 @@ const embedRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
     if (ctx.embed) { ctx.embed(target); } else { el.textContent = "embed capability unavailable"; }
 };
 
+// Raw HTML: render arbitrary HTML with NO sanitization, and execute any <script>
+// tags (innerHTML alone won't run them). This is the "simple HTML block without
+// limitations" — scripts/iframes run in page scope. (Power-user feature: the code
+// here is whatever the block author writes, so treat it like any custom code.)
+const htmlRun = (ctx: SuperBlockCtx, cfg: Record<string, unknown>) => {
+    const el = ctx.el as HTMLElement;
+    el.innerHTML = String(cfg.html || "");
+    // Re-create <script> nodes so the browser actually executes them.
+    el.querySelectorAll("script").forEach((old) => {
+        const s = document.createElement("script");
+        Array.from(old.attributes).forEach((a) => s.setAttribute(a.name, a.value));
+        s.textContent = old.textContent;
+        old.replaceWith(s);
+    });
+};
+
 export const registerBuiltinFeatures = () => {
     // ---------------------------------------------------------------------
     // FROZEN (see featureFlags.ts): the calendar + database multi-view are the
@@ -899,5 +915,15 @@ export const registerBuiltinFeatures = () => {
             {key: "view", label: "Mode", type: "select", options: [{value: "iframe", label: "Isolated window (recommended)"}, {value: "editable", label: "Inline editor"}, {value: "readonly", label: "Read-only"}]},
         ],
         run: embedRun,
+    });
+    registerFeature({
+        id: "html",
+        label: "Raw HTML (unrestricted)",
+        caps: ["ui"],
+        defaultConfig: {html: "<b>Hello</b> from a raw HTML block"},
+        configSchema: [
+            {key: "html", label: "HTML (scripts & iframes allowed, unsanitized)", type: "code"},
+        ],
+        run: htmlRun,
     });
 };
