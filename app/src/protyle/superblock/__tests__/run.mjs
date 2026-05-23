@@ -27,24 +27,27 @@ writeFileSync(path.join(work, "runtime.ts"),
     "export const registerFeature=(d)=>__features.set(d.id,d);\n");
 cpSync(path.join(here, "superblock.test.ts"), path.join(work, "superblock.test.ts"));
 
+// Resolve test deps from the temp dir; install BOTH at once (a package.json keeps
+// npm from pruning one when installing the other).
+writeFileSync(path.join(work, "package.json"), '{"name":"sbtest","private":true}\n');
 const req = createRequire(path.join(work, "noop.js"));
-const need = (name) => {
-    try { return req(name); } catch {
-        console.log(`installing ${name} (one-time)…`);
-        execFileSync("npm", ["i", name, "--no-save", "--no-audit", "--no-fund"], {cwd: work, stdio: "inherit"});
-        return req(name);
-    }
-};
+let esbuild;
+let JSDOM;
+const load = () => { esbuild = req("esbuild"); ({JSDOM} = req("jsdom")); };
+try {
+    load();
+} catch {
+    console.log("installing test deps (esbuild, jsdom) — one-time…");
+    execFileSync("npm", ["i", "esbuild", "jsdom", "--no-audit", "--no-fund"], {cwd: work, stdio: "inherit"});
+    load();
+}
 
 console.log("bundling (esbuild)…");
-const esbuild = need("esbuild");
 esbuild.buildSync({
     entryPoints: [path.join(work, "superblock.test.ts")],
     bundle: true, platform: "node", format: "cjs",
     outfile: path.join(work, "test.cjs"),
 });
-
-const {JSDOM} = need("jsdom");
 
 const dom = new JSDOM("<!DOCTYPE html><body></body>", {pretendToBeVisual: true});
 globalThis.window = dom.window;
