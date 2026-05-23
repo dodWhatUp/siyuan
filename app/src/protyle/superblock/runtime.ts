@@ -17,7 +17,7 @@ import {addScript} from "../util/addScript";
 import {superblockRender, SB_MARKER, SB_CODE} from "../render/superblockRender";
 import {genIconHTML} from "../render/util";
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -71,6 +71,13 @@ export interface SuperBlockCtx {
     // control to one of the block's own attributes: the control shows the stored
     // value, edits write back (debounced), and external changes update the control.
     bind?: (attrKey: string, control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) => void;
+    // present only when the "channel" capability is enabled. In-doc pub/sub: one
+    // block emits on a named channel, others react — lets a filter block drive
+    // several view blocks. Subscriptions auto-removed on unmount.
+    channel?: (name: string) => {
+        emit: (data: unknown) => void;
+        on: (cb: (data: unknown) => void) => void;
+    };
 }
 
 // A preset is a named capability profile — the user-facing "block type".
@@ -85,7 +92,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -146,6 +153,8 @@ interface HostDisposables {
 const hostDisposables = new WeakMap<HTMLElement, HostDisposables>();
 // Last-rendered signature per host, for the idempotent-render guard (Seq 4).
 const hostSignatures = new WeakMap<HTMLElement, string>();
+// In-doc pub/sub channels for ctx.channel — name -> subscriber callbacks.
+const channelBus = new Map<string, Set<(data: unknown) => void>>();
 const getDisposables = (host: HTMLElement): HostDisposables => {
     let d = hostDisposables.get(host);
     if (!d) {
@@ -429,6 +438,28 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[key]: value}});
             },
         };
+    }],
+    ["channel", ({ctx, host}) => {
+        ctx.channel = (name: string) => ({
+            emit: (data: unknown) => {
+                channelBus.get(name)?.forEach((cb) => {
+                    try {
+                        cb(data);
+                    } catch (e) {
+                        // a faulty subscriber must not break the emitter
+                    }
+                });
+            },
+            on: (cb: (data: unknown) => void) => {
+                let set = channelBus.get(name);
+                if (!set) {
+                    set = new Set();
+                    channelBus.set(name, set);
+                }
+                set.add(cb);
+                getDisposables(host).unmounts.push(() => set!.delete(cb));
+            },
+        });
     }],
     ["bind", ({ctx, blockId, host}) => {
         const blockEl = host.closest("[data-node-id]") as HTMLElement | null;
