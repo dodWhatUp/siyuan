@@ -130,3 +130,30 @@ export const nextFire = (baseTs: number, meta: ReminderMeta, fromTs: number): nu
     const fires = upcomingFires(baseTs, meta, fromTs, fromTs + 366 * DAY_MS);
     return fires.length ? fires[0] : null;
 };
+
+// Scan a database's rows and return every reminder that fires in [winStart, winEnd].
+// `dateKey`/`reminderKey` are the canonical date column + the JSON companion column.
+// Pure (no DOM/network): a scheduler feeds in rows from ctx.av.read each tick.
+type SchedCell = {id: string; value: {type?: string; keyID?: string; block?: {content?: string}; date?: {content: number; isNotEmpty: boolean}; text?: {content?: string}}};
+type SchedRow = {id: string; cells: SchedCell[]};
+export interface DueFire { rowId: string; title: string; fireTs: number; }
+
+export const collectDueFires = (
+    rows: SchedRow[], dateKey: string, reminderKey: string, winStart: number, winEnd: number,
+): DueFire[] => {
+    const out: DueFire[] = [];
+    rows.forEach((r) => {
+        const dc = r.cells.find((c) => c.value && c.value.keyID === dateKey);
+        const rc = r.cells.find((c) => c.value && c.value.keyID === reminderKey);
+        const tc = r.cells.find((c) => c.value && c.value.type === "block");
+        const ts = (dc && dc.value.date && dc.value.date.isNotEmpty) ? dc.value.date.content : null;
+        if (ts == null || !rc) {
+            return;
+        }
+        let meta: ReminderMeta = {};
+        try { meta = JSON.parse((rc.value.text && rc.value.text.content) || "{}") as ReminderMeta; } catch { /* not JSON → no reminder */ }
+        const title = (tc && tc.value.block && tc.value.block.content) || "(task)";
+        upcomingFires(ts, meta, winStart, winEnd).forEach((f) => out.push({rowId: r.id, title, fireTs: f}));
+    });
+    return out.sort((a, b) => a.fireTs - b.fireTs);
+};
