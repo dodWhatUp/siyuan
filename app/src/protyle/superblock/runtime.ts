@@ -29,8 +29,24 @@ import {storagePath} from "./storage";
 import {registerBlockDecorator, BlockDecorator} from "./blockDecorators";
 import {addTopBar, addStatusBar, addSlashCommand, makeBlockMenuHandler, BlockMenuItem, SlashHost} from "./uiSurfaces";
 import {registerExport, clearExport} from "./exportRegistry";
-import {surfaceOpenTab, surfaceCommand} from "./pluginHost";
 import {genIconHTML} from "../render/util";
+
+// Tabs/command surfaces are backed by a real host Plugin (pluginHost.ts). That
+// module imports plugin/index, so it is loaded LAZILY (dynamic import) to keep the
+// heavy plugin/layout subsystem out of the early-loaded runtime's module-eval graph
+// — a static import here reorders evaluation and can trip a latent circular dep,
+// crashing app boot. Lazy import means the cost (and the cycle risk) only happens
+// the first time a block actually opens a tab / registers a command.
+const lazyOpenTab = (o: {title: string; icon?: string; render: (el: HTMLElement) => void; data?: unknown}): boolean => {
+    import("./pluginHost").then((m) => m.surfaceOpenTab(o)).catch((e) => console.warn("[superblock] openTab failed", e));
+    return true;
+};
+const lazyCommand = (o: {id: string; label: string; hotkey?: string; callback: () => void}): (() => void) => {
+    let off: (() => void) | null = null;
+    let cancelled = false;
+    import("./pluginHost").then((m) => { if (!cancelled) { off = m.surfaceCommand(o); } }).catch((e) => console.warn("[superblock] command failed", e));
+    return () => { cancelled = true; if (off) { off(); } };
+};
 
 export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request";
 
@@ -839,8 +855,8 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 bus.on("click-blockicon" as never, handler as never);
                 return track(() => bus.off("click-blockicon" as never, handler as never));
             },
-            openTab: (o) => surfaceOpenTab(o),
-            command: (o) => track(surfaceCommand(o)),
+            openTab: (o) => lazyOpenTab(o),
+            command: (o) => track(lazyCommand(o)),
         };
     }],
     ["export", ({ctx, blockId, host}) => {

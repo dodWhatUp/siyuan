@@ -385,9 +385,15 @@ export const onTransaction = (protyle: IProtyle, operation: IOperation, isUndo: 
     if (protyle.wysiwyg.element.firstElementChild?.classList.contains("protyle-password")) {
         return;
     }
+    // NESTED-EDITOR GUARD (super-block embed): the host's wysiwyg CONTAINS any nested
+    // editable embed's DOM, so these id lookups would also match the embed's copy and
+    // double-apply the transaction (duplicate-rendered blocks on Enter). A block is
+    // "ours" only if its nearest .protyle is this protyle. Protyle-relative so the
+    // nested editor still processes its own blocks correctly.
+    const isOwnBlock = (item: Element) => item.closest(".protyle") === protyle.element;
     const updateElements: Element[] = [];
     Array.from(protyle.wysiwyg.element.querySelectorAll(`[data-node-id="${operation.id}"]`)).forEach(item => {
-        if (!isInEmbedBlock(item)) {
+        if (!isInEmbedBlock(item) && isOwnBlock(item)) {
             updateElements.push(item);
         }
     });
@@ -814,6 +820,7 @@ export const onTransaction = (protyle: IProtyle, operation: IOperation, isUndo: 
                 }
             } else {
                 previousElement.forEach(item => {
+                    if (!isOwnBlock(item)) { return; } // skip a nested embed editor's copy
                     const embedElement = isInEmbedBlock(item);
                     if (embedElement) {
                         // https://github.com/siyuan-note/siyuan/issues/5524
@@ -827,6 +834,7 @@ export const onTransaction = (protyle: IProtyle, operation: IOperation, isUndo: 
             }
         } else if (operation.nextID) {
             Array.from(protyle.wysiwyg.element.querySelectorAll(`[data-node-id="${operation.nextID}"]`)).forEach(item => {
+                if (!isOwnBlock(item)) { return; } // skip a nested embed editor's copy
                 const embedElement = isInEmbedBlock(item);
                 if (embedElement) {
                     // https://github.com/siyuan-note/siyuan/issues/5524
@@ -851,7 +859,7 @@ export const onTransaction = (protyle: IProtyle, operation: IOperation, isUndo: 
                 }
             } else {
                 parentElement.forEach(item => {
-                    if (!isInEmbedBlock(item)) {
+                    if (!isInEmbedBlock(item) && isOwnBlock(item)) {
                         // 列表特殊处理
                         if (item.firstElementChild?.classList.contains("protyle-action")) {
                             item.firstElementChild.insertAdjacentHTML("afterend", operation.data);

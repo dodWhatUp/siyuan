@@ -123,6 +123,14 @@ export const keydown = (protyle: IProtyle, editorElement: HTMLElement) => {
         if (!nodeElement) {
             return;
         }
+        // NESTED-EDITOR GUARD (super-block embed): a nested Protyle lives inside this
+        // host's wysiwyg, so its keystrokes bubble here. The nested editor's own keydown
+        // handler (closer to the target) already handled them; running the host's
+        // Enter/insert/focus logic on a block from a different .protyle corrupts block
+        // ids and crashes focusBlock (setStart on a node not in this tree). Bail out.
+        if (nodeElement.closest(".protyle") !== protyle.element) {
+            return;
+        }
 
         // https://ld246.com/article/1694506408293
         const endElement = hasClosestBlock(range.endContainer);

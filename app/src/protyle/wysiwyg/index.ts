@@ -2462,6 +2462,13 @@ export class WYSIWYG {
             if (!blockElement) {
                 return;
             }
+            // NESTED-EDITOR GUARD (super-block embed): an embedded Protyle lives INSIDE
+            // this host's wysiwyg DOM, so its input bubbles here too. If the focused block
+            // belongs to a different (nested) .protyle, let that editor handle it — the host
+            // must not re-apply the edit (cause of doubled letters / dual-id corruption).
+            if (blockElement.closest(".protyle") !== protyle.element) {
+                return;
+            }
             if ("" !== event.data) {
                 this.escapeInline(protyle, range, event);
                 // 小鹤音形 ;k 不能使用 setTimeout;
@@ -2492,6 +2499,10 @@ export class WYSIWYG {
             const range = getEditorRange(this.element);
             const blockElement = hasClosestBlock(range.startContainer);
             if (!blockElement) {
+                return;
+            }
+            // NESTED-EDITOR GUARD (super-block embed) — see compositionend handler above.
+            if (blockElement.closest(".protyle") !== protyle.element) {
                 return;
             }
             if ([":", "(", "【", "（", "[", "{", "「", "『", "#", "/", "、"].includes(event.data)) {
