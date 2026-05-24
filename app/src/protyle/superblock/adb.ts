@@ -98,6 +98,58 @@ export interface AdbResolved {
     globalTypes: Record<string, unknown>; // type defs pulled from the registry (if any)
 }
 
+// ── Type registry (in-memory vocabulary) ────────────────────────────────────
+// A property's `type` is a string id. The registry lets plugins DECLARE the types
+// they understand (id + an optional config validator + metadata), so multiple
+// plugins agree on ids and `validate()` can check a property's `config` against its
+// type. This is runtime/in-memory (re-declared each session, like the feature/preset
+// registries) — it is NOT the persisted global-types store (see loadGlobalTypes).
+export interface AdbTypeDef {
+    id: string;                                        // e.g. "adb:date-reminder-repeat"
+    label?: string;
+    base?: string;                                     // native av type it extends (e.g. "date")
+    description?: string;
+    // Return a list of problems with the given config; empty array = valid.
+    validateConfig?: (config: Record<string, unknown> | undefined) => string[];
+}
+
+const typeRegistry = new Map<string, AdbTypeDef>();
+
+export const registerType = (def: AdbTypeDef): void => {
+    if (def && def.id) { typeRegistry.set(def.id, def); }
+};
+export const getType = (id: string): AdbTypeDef | undefined => typeRegistry.get(id);
+export const listTypes = (): AdbTypeDef[] => Array.from(typeRegistry.values());
+
+// Validate a config blob against a registered type. Unknown types pass (a plugin may
+// own them); registered types defer to their own validateConfig.
+export const validateConfig = (typeId: string, config: Record<string, unknown> | undefined): string[] => {
+    const def = typeRegistry.get(typeId);
+    if (!def || !def.validateConfig) { return []; }
+    try { return def.validateConfig(config) || []; } catch (e) { return [`config validator threw: ${(e as Error).message}`]; }
+};
+
+// Reserved CORE type ids — declared here so the vocabulary is stable across plugins.
+// These are DEFINITIONS / shape contracts only; the actual behavior + UI live in the
+// feature plugin, which may re-register the same id to attach its runtime.
+registerType({
+    id: "adb:date-reminder-repeat",
+    label: "Date + reminder + repeat",
+    base: "date",
+    description: "A date column with an optional relative reminder and a recurrence rule. " +
+        "config: { reminder?: {mode:'relative'|'absolute', offsetMinutes?:number, at?:string}, " +
+        "repeat?: {freq:'daily'|'weekly'|'monthly'|'yearly', interval?:number, byDay?:string[], until?:string|null} }",
+    validateConfig: (c) => {
+        const errs: string[] = [];
+        if (!c) { return errs; }
+        const r = c.reminder as Record<string, unknown> | undefined;
+        if (r && r.mode && !["relative", "absolute"].includes(String(r.mode))) { errs.push("reminder.mode must be 'relative' or 'absolute'"); }
+        const rep = c.repeat as Record<string, unknown> | undefined;
+        if (rep && rep.freq && !["daily", "weekly", "monthly", "yearly"].includes(String(rep.freq))) { errs.push("repeat.freq invalid"); }
+        return errs;
+    },
+});
+
 // A fresh, self-documenting empty schema.
 export const emptySchema = (): AdbSchema => ({
     $schema: ADB_SCHEMA_ID,
@@ -107,6 +159,56 @@ export const emptySchema = (): AdbSchema => ({
     properties: {},
     groups: [],
 });
+
+// ── Migration ────────────────────────────────────────────────────────────────
+// Upgrade an older schema to the current version. v1 is the first version, so this
+// is currently a stamp/normalize; future versions add steps here. read() runs it so
+// callers always get a current-shaped schema.
+export const migrate = (schema: AdbSchema): AdbSchema => {
+    const s: AdbSchema = {...emptySchema(), ...schema};
+    // (future: if (s.version < 2) { …transform…; s.version = 2; })
+    s.version = ADB_VERSION;
+    s.$schema = ADB_SCHEMA_ID;
+    return s;
+};
+
+// ── Change notification ──────────────────────────────────────────────────────
+// write() notifies subscribers so live views can refresh. Self-contained (not wired
+// to the global SPI emitter) to keep the base decoupled.
+type AdbChangeListener = (blockId: string, schema: AdbSchema) => void;
+const changeListeners = new Set<AdbChangeListener>();
+export const onChange = (cb: AdbChangeListener): (() => void) => {
+    changeListeners.add(cb);
+    return () => changeListeners.delete(cb);
+};
+const emitChange = (blockId: string, schema: AdbSchema): void => {
+    changeListeners.forEach((cb) => { try { cb(blockId, schema); } catch (e) { /* ignore */ } });
+};
+
+// ── Conditional visibility (pure) ────────────────────────────────────────────
+// Shared semantics so every plugin decides "show this property?" identically.
+// rowValues maps a native key id → that cell's value (see readRow).
+export const evaluateCondition = (cond: AdbCondition, rowValues: Record<string, unknown>): boolean => {
+    if (!cond || !cond.property) { return true; }
+    const v = rowValues ? rowValues[cond.property] : undefined;
+    const op = cond.op || "eq";
+    switch (op) {
+        case "empty": return v === undefined || v === null || v === "";
+        case "notEmpty": return !(v === undefined || v === null || v === "");
+        case "neq": return v !== cond.value;
+        case "in": return Array.isArray(cond.value) && (cond.value as unknown[]).includes(v);
+        case "eq":
+        default: return v === cond.value;
+    }
+};
+
+// Is a property visible for a given row? Hidden wins; otherwise honour showWhen.
+export const isVisible = (prop: AdbProperty, rowValues: Record<string, unknown>): boolean => {
+    if (!prop) { return false; }
+    if (prop.hidden) { return false; }
+    if (prop.showWhen) { return evaluateCondition(prop.showWhen, rowValues || {}); }
+    return true;
+};
 
 const getAttrs = async (blockId: string): Promise<Record<string, string>> => {
     const r = await fetchSyncPost("/api/attr/getBlockAttrs", {id: blockId});
@@ -121,7 +223,7 @@ export const read = async (blockId: string): Promise<AdbSchema | null> => {
         return null;
     }
     try {
-        return {...emptySchema(), ...JSON.parse(raw)};
+        return migrate(JSON.parse(raw));
     } catch (e) {
         return emptySchema();
     }
@@ -132,6 +234,7 @@ export const read = async (blockId: string): Promise<AdbSchema | null> => {
 export const write = async (blockId: string, schema: AdbSchema): Promise<void> => {
     const out: AdbSchema = {...schema, $schema: ADB_SCHEMA_ID, $doc: ADB_DOC, version: ADB_VERSION};
     await fetchSyncPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[ADB_ATTR]: JSON.stringify(out)}});
+    emitChange(blockId, out);
 };
 
 // Cheap check used by callers / discovery.
@@ -152,6 +255,10 @@ export const validate = (schema: AdbSchema): {ok: boolean; errors: string[]} => 
         if (!p || typeof p.type !== "string" || !p.type) { errors.push(`property ${keyId}: missing type`); }
         if (p && p.group && !groupIds.has(p.group)) { errors.push(`property ${keyId}: group "${p.group}" not defined`); }
         if (p && p.showWhen && (!p.showWhen.property)) { errors.push(`property ${keyId}: showWhen needs a controlling property`); }
+        // Type-specific config check, when the type is registered.
+        if (p && p.type) {
+            validateConfig(p.type, p.config).forEach((e) => errors.push(`property ${keyId} (${p.type}): ${e}`));
+        }
     });
     return {ok: errors.length === 0, errors};
 };
@@ -189,6 +296,27 @@ export const resolve = async (blockId: string): Promise<AdbResolved> => {
     return {schema, columns, orphans, unconfigured, globalTypes};
 };
 
+// READ a single database row's cell values, keyed by native key id. Standardizes the
+// (fiddly) av read so conditions/reminders/features all read values the same way.
+// Returns {} if the row isn't found. Best-effort across renderAttributeView shapes.
+export const readRow = async (blockId: string, rowId: string): Promise<Record<string, unknown>> => {
+    try {
+        const r = await fetchSyncPost("/api/av/renderAttributeView", {id: blockId});
+        const rows = (((r && r.data) || {}).view || {}).rows || [];
+        const row = rows.find((rw: Record<string, unknown>) => String(rw.id) === String(rowId));
+        if (!row) { return {}; }
+        const out: Record<string, unknown> = {};
+        ((row.cells as Array<Record<string, unknown>>) || []).forEach((cell) => {
+            const val = (cell.value as Record<string, unknown>) || {};
+            const keyId = String(val.keyID || cell.keyID || "");
+            if (keyId) { out[keyId] = val; }
+        });
+        return out;
+    } catch (e) {
+        return {};
+    }
+};
+
 // FIND the global registry database by its marker — no id needs to be known up front.
 export const findRegistry = async (): Promise<string | null> => {
     try {
@@ -213,6 +341,47 @@ export const loadGlobalTypes = async (registryId: string): Promise<Record<string
     }
 };
 
+// ENSURE the global registry exists, returning its block id. If none is found by the
+// marker, create a plain DOCUMENT carrying the marker — a doc (not a database) is
+// enough for the base, since the registry only needs to hold reusable type defs (in
+// `custom-adb-types`) and be discoverable. A future "global database" feature can add
+// a real av INSIDE this doc. Creating a doc is reliable; creating an av is not.
+export const ensureRegistry = async (): Promise<string | null> => {
+    const existing = await findRegistry();
+    if (existing) { return existing; }
+    try {
+        const nb = await fetchSyncPost("/api/notebook/lsNotebooks", {});
+        const notebooks = ((nb && nb.data) || {}).notebooks || [];
+        const open = notebooks.find((n: Record<string, unknown>) => !n.closed) || notebooks[0];
+        if (!open) { return null; }
+        const created = await fetchSyncPost("/api/filetree/createDocWithMd", {
+            notebook: open.id, path: "/ADB Schema Registry",
+            markdown: "# ADB Schema Registry\n\nReusable advanced-database type definitions are stored in this document's attributes (`custom-adb-types`). Managed by the advanced-database system — see notes/20.",
+        });
+        const docId = created && created.data;
+        if (!docId) { return null; }
+        await fetchSyncPost("/api/attr/setBlockAttrs", {id: docId, attrs: {[ADB_REGISTRY_ATTR]: "v1"}});
+        return docId;
+    } catch (e) {
+        return null;
+    }
+};
+
+// Persist the reusable type-definition map onto the registry doc (`custom-adb-types`).
+export const saveGlobalTypes = async (registryId: string, types: Record<string, unknown>): Promise<void> => {
+    await fetchSyncPost("/api/attr/setBlockAttrs", {id: registryId, attrs: {[ADB_TYPES_ATTR]: JSON.stringify(types)}});
+};
+
+// Convenience: add/update one reusable type in the registry (creating it if needed).
+export const registerGlobalType = async (id: string, def: Record<string, unknown>): Promise<string | null> => {
+    const registryId = await ensureRegistry();
+    if (!registryId) { return null; }
+    const types = await loadGlobalTypes(registryId);
+    types[id] = def;
+    await saveGlobalTypes(registryId, types);
+    return registryId;
+};
+
 // The accessor object exposed on the super-block SPI as `window.siyuan.superblock.adb`.
 export const adb = {
     VERSION: ADB_VERSION,
@@ -226,6 +395,23 @@ export const adb = {
     isAdvanced,
     validate,
     resolve,
+    migrate,
+    // type vocabulary
+    registerType,
+    getType,
+    listTypes,
+    validateConfig,
+    // conditional visibility (pure)
+    evaluateCondition,
+    isVisible,
+    // row value access
+    readRow,
+    // global registry
     findRegistry,
+    ensureRegistry,
     loadGlobalTypes,
+    saveGlobalTypes,
+    registerGlobalType,
+    // change notification
+    onChange,
 };
