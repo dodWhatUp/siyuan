@@ -29,6 +29,7 @@ import {storagePath} from "./storage";
 import {registerBlockDecorator, BlockDecorator} from "./blockDecorators";
 import {addTopBar, addStatusBar, addSlashCommand, makeBlockMenuHandler, BlockMenuItem, SlashHost} from "./uiSurfaces";
 import {registerExport, clearExport} from "./exportRegistry";
+import {surfaceOpenTab, surfaceCommand} from "./pluginHost";
 import {genIconHTML} from "../render/util";
 
 export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request";
@@ -141,9 +142,11 @@ export interface SuperBlockCtx {
     // block). Applies to current + future blocks; auto-unregistered on unmount.
     decorate?: (def: BlockDecorator) => () => void;
     // present with the "surfaces" capability. Add APP-LEVEL UI outside this block:
-    // a top-bar icon, a status-bar item, or a slash (/) command. Each returns an
-    // unregister fn and is auto-removed on unmount. (Docks/custom tabs need
-    // layout-init registration and are not addable at runtime.)
+    // a top-bar icon, a status-bar item, a slash (/) command, a native block-menu
+    // item, a command-palette entry, or open a custom TAB. Each returns an
+    // unregister fn (openTab returns a boolean — tabs are closed via the tab UI) and
+    // is auto-removed on unmount where applicable. (Docks still need layout-init
+    // registration and are intentionally not exposed here.)
     surfaces?: {
         topBar: (o: {icon: string; title: string; position?: "left" | "right"; onclick: (e: MouseEvent) => void}) => () => void;
         statusBar: (o: {html?: string; element?: HTMLElement; position?: "left" | "right"; onclick?: (e: MouseEvent) => void}) => () => void;
@@ -152,6 +155,13 @@ export interface SuperBlockCtx {
         // `match(blockEl)` gates which blocks show it (default: all); `click` fires
         // with the matched block element. Auto-removed on unmount.
         blockMenu: (o: BlockMenuItem) => () => void;
+        // Open a custom tab whose body is rendered by render(el). Backed by a real
+        // host Plugin's addTab + openFile — behaves like any plugin tab. Returns true
+        // if opened (false if the layout isn't ready yet).
+        openTab: (o: {title: string; icon?: string; render: (el: HTMLElement) => void; data?: unknown}) => boolean;
+        // Add a searchable command-palette entry (optionally hotkeyed). Returns an
+        // unregister fn; auto-removed on unmount.
+        command: (o: {id: string; label: string; hotkey?: string; callback: () => void}) => () => void;
     };
     // present with the "export" capability. Declare a STATIC representation the
     // block contributes to copies/exports (instead of its live interactive output).
@@ -829,6 +839,8 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 bus.on("click-blockicon" as never, handler as never);
                 return track(() => bus.off("click-blockicon" as never, handler as never));
             },
+            openTab: (o) => surfaceOpenTab(o),
+            command: (o) => track(surfaceCommand(o)),
         };
     }],
     ["export", ({ctx, blockId, host}) => {
