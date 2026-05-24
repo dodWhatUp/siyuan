@@ -23,8 +23,9 @@ import {buildICS, icsFromRows, minutesToTrigger} from "./icsExport";
 import {parseNlDate, parseQuickAdd, extractTags, extractPriority} from "./nlDate";
 import {registerBlockDecorator, listBlockDecorators} from "./blockDecorators";
 import {getExportContent, listExports} from "./exportRegistry";
+import {adb} from "./adb";
 
-export const SUPERBLOCK_API_VERSION = "0.5.0";
+export const SUPERBLOCK_API_VERSION = "0.6.0";
 
 // Idempotent: registers window.siyuan.superblock once, at app init (before
 // plugins load), so plugins can use it in their onload.
@@ -75,6 +76,9 @@ export const registerSuperBlockAPI = () => {
         ics: {buildICS, icsFromRows, minutesToTrigger},
         // natural-language quick-add (ported from task plugin)
         nl: {parseNlDate, parseQuickAdd, extractTags, extractPriority},
+        // advanced-database schema FOUNDATION (notes/20) — read/write/validate/resolve
+        // a behavior layer over a native database; no features, just the contract.
+        adb,
     };
     // Register the core built-in features (query, …) so they're available by default.
     registerBuiltinFeatures();
