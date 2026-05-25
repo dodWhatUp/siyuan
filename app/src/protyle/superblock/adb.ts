@@ -394,6 +394,113 @@ export const registerGlobalType = async (id: string, def: Record<string, unknown
     return registryId;
 };
 
+// ============================================================================
+// Data / sync backbone — read all rows + write rows/cells, an advanced-only
+// "sidecar" (fields with no native column, keyed by row id), and a reconcile pass.
+// ----------------------------------------------------------------------------
+// Design: the NATIVE database is the single source of truth for the data. There is
+// NO second copy to sync — the advanced layer reads native data live and writes
+// edits straight back via the av transaction API. The original dataview is never
+// modified. Only advanced-only fields (no native column) live separately, in the
+// `custom-adb-data` sidecar keyed by row id; reconcile() diffs that against the live
+// rows so adds/removes in the native db flow into the advanced layer.
+// ============================================================================
+
+export const ADB_DATA_ATTR = "custom-adb-data"; // sidecar: advanced-only fields per row id
+
+const w = () => window as unknown as {siyuan: {ws: {app: {appId: string}}}; Lute: {NewNodeID: () => string}};
+// av WRITE transactions MUST carry the real app session, or the kernel no-ops them.
+const session = (): string => { try { return w().siyuan.ws.app.appId; } catch (e) { return ""; } };
+const newId = (): string => w().Lute.NewNodeID();
+const stamp = (): string => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return "" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()); };
+const tx = (doOperations: unknown[]) => fetchSyncPost("/api/transactions", {session: session(), app: session(), reqId: Date.now(), transactions: [{doOperations}]});
+
+// Read ALL rows of a database, each as {id, values} where values is keyed by native
+// key id. Spans table rows + grouped (kanban/gallery) rows. Reads live native data.
+export const readRows = async (blockId: string): Promise<Array<{id: string; values: Record<string, unknown>}>> => {
+    try {
+        const r = await fetchSyncPost("/api/av/renderAttributeView", {id: await avIdOf(blockId), blockID: blockId, pageSize: 9999, viewID: "", query: ""});
+        const view = ((r && r.data) || {}).view || {};
+        const rows = (view.rows || []).concat(...((view.groups || []).map((g: Record<string, unknown>) => (g.rows as unknown[]) || [])));
+        return rows.map((row: Record<string, unknown>) => {
+            const values: Record<string, unknown> = {};
+            ((row.cells as Array<Record<string, unknown>>) || []).forEach((c) => {
+                const v = (c.value as Record<string, unknown>) || {};
+                const k = String(v.keyID || "");
+                if (k) { values[k] = v; }
+            });
+            return {id: String(row.id), values};
+        });
+    } catch (e) { return []; }
+};
+
+// Add a detached row; optionally set initial cell values ({keyId: cellValueObject}).
+// Returns the new row id. Writes to the native db.
+export const addRow = async (blockId: string, opts: {content?: string; previousID?: string; values?: Record<string, unknown>} = {}): Promise<string> => {
+    const avID = await avIdOf(blockId);
+    // The kernel assigns the row its OWN block id (the id we pass in srcs is not the
+    // stored row id), so capture the row ids before, insert, then diff to find the
+    // real new id (with a short retry for render propagation).
+    const before = new Set((await readRows(blockId)).map((r) => r.id));
+    await tx([
+        {action: "insertAttrViewBlock", avID, previousID: opts.previousID || "", srcs: [{itemID: newId(), id: newId(), isDetached: true, content: opts.content || ""}], blockID: blockId, groupID: ""},
+        {action: "doUpdateUpdated", id: blockId, data: stamp()},
+    ]);
+    let rowId = "";
+    for (let i = 0; i < 6 && !rowId; i++) {
+        await new Promise((s) => setTimeout(s, 150));
+        const fresh = await readRows(blockId);
+        const nw = fresh.find((r) => !before.has(r.id));
+        if (nw) { rowId = nw.id; }
+    }
+    if (rowId && opts.values) {
+        for (const [keyId, data] of Object.entries(opts.values)) { await setCell(blockId, rowId, keyId, data); }
+    }
+    return rowId;
+};
+
+// Set one cell. `data` is the typed cell value, e.g. {type:"date", date:{content,isNotEmpty,…}}
+// or {type:"text", text:{content}}. Writes to the native db.
+export const setCell = async (blockId: string, rowId: string, keyId: string, data: unknown): Promise<void> => {
+    await tx([{action: "updateAttrViewCell", id: newId(), avID: await avIdOf(blockId), keyID: keyId, rowID: rowId, data}]);
+};
+
+// Remove a row from the native db. (Destructive — for plugins/users to call deliberately.)
+export const deleteRow = async (blockId: string, rowId: string): Promise<void> => {
+    await tx([
+        {action: "removeAttrViewBlock", srcIDs: [rowId], avID: await avIdOf(blockId)},
+        {action: "doUpdateUpdated", id: blockId, data: stamp()},
+    ]);
+};
+
+// Advanced-only sidecar (fields with no native column), keyed by row id, in custom-adb-data.
+export const readSidecar = async (blockId: string): Promise<Record<string, Record<string, unknown>>> => {
+    const a = await getAttrs(blockId);
+    try { return a[ADB_DATA_ATTR] ? JSON.parse(a[ADB_DATA_ATTR]) : {}; } catch (e) { return {}; }
+};
+export const writeSidecar = async (blockId: string, data: Record<string, Record<string, unknown>>): Promise<void> => {
+    await fetchSyncPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[ADB_DATA_ATTR]: JSON.stringify(data)}});
+};
+export const setSidecarField = async (blockId: string, rowId: string, field: string, value: unknown): Promise<void> => {
+    const d = await readSidecar(blockId);
+    if (!d[rowId]) { d[rowId] = {}; }
+    d[rowId][field] = value;
+    await writeSidecar(blockId, d);
+};
+
+// Reconcile the sidecar against live rows: report new rows (no sidecar entry yet) and
+// prune orphans (sidecar entries whose row was deleted). This is the "content
+// comparison → fold in changes not yet tracked" pass, keyed by stable row id.
+export const reconcile = async (blockId: string): Promise<{liveRows: number; added: string[]; removed: string[]}> => {
+    const rows = await readRows(blockId);
+    const liveIds = new Set(rows.map((r) => r.id));
+    const side = await readSidecar(blockId);
+    const added = rows.map((r) => r.id).filter((id) => !side[id]);
+    const removed = Object.keys(side).filter((id) => !liveIds.has(id));
+    if (removed.length) { removed.forEach((id) => delete side[id]); await writeSidecar(blockId, side); }
+    return {liveRows: rows.length, added, removed};
+};
+
 // The accessor object exposed on the super-block SPI as `window.siyuan.superblock.adb`.
 export const adb = {
     VERSION: ADB_VERSION,
@@ -418,6 +525,15 @@ export const adb = {
     isVisible,
     // row value access
     readRow,
+    // data / sync backbone (read all + write rows/cells + sidecar + reconcile)
+    readRows,
+    addRow,
+    setCell,
+    deleteRow,
+    readSidecar,
+    writeSidecar,
+    setSidecarField,
+    reconcile,
     // global registry
     findRegistry,
     ensureRegistry,
