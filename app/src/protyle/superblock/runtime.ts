@@ -49,7 +49,7 @@ const lazyCommand = (o: {id: string; label: string; hotkey?: string; callback: (
     return () => { cancelled = true; if (off) { off(); } };
 };
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request" | "adb";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request" | "adb" | "query";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -239,6 +239,14 @@ export interface SuperBlockCtx {
     // granted: read/write a database's schema + rows + sidecar and render a UI element
     // over it. Same object as window.siyuan.superblock.adb.
     adb?: typeof adb;
+    // QUERY CAPABILITY (notes/23): present when the "query" cap is granted — a gated,
+    // read-only search surface so features (e.g. advanced-search) run SQL / full-text
+    // through ONE confirmed path instead of each re-wiring /api/query/sql. First use
+    // prompts a per-block confirm (same as api/av).
+    query?: {
+        sql: (stmt: string) => Promise<Array<Record<string, unknown>>>;
+        fullText: (text: string, limit?: number) => Promise<Array<Record<string, unknown>>>;
+    };
     // present in FEATURE mode: the block's parsed, validated config (from
     // custom-sb-config merged over the feature's defaultConfig). Lets a feature's
     // run(ctx, config) be config-driven instead of hard-coded (notes/14, L2/L3).
@@ -257,7 +265,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate", "surfaces", "export", "request", "adb"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate", "surfaces", "export", "request", "adb", "query"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -1023,6 +1031,30 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
     // consent; the accessor's own write ops go through the kernel.
     ["adb", ({ctx}) => {
         ctx.adb = adb;
+    }],
+    // QUERY CAPABILITY (notes/23): gated read-only SQL / full-text. One confirmed surface
+    // for all features so query plumbing isn't duplicated. Read-only — no write endpoints.
+    ["query", ({ctx, blockId}) => {
+        ctx.query = {
+            sql: async (stmt: string): Promise<Array<Record<string, unknown>>> => {
+                if (!(await ensureGrant(blockId, "query", "search your vault (run queries)"))) {
+                    throw new Error("query: denied by user");
+                }
+                const r = await fetchSyncPost("/api/query/sql", {stmt});
+                return (r && (r.data as Array<Record<string, unknown>>)) || [];
+            },
+            // Convenience full-text over block content; implemented as a LIKE query so it
+            // needs no extra endpoint and rides the same grant.
+            fullText: async (text: string, limit = 50): Promise<Array<Record<string, unknown>>> => {
+                if (!(await ensureGrant(blockId, "query", "search your vault (run queries)"))) {
+                    throw new Error("query: denied by user");
+                }
+                const safe = String(text || "").replace(/'/g, "''");
+                const stmt = `SELECT * FROM blocks WHERE content LIKE '%${safe}%' LIMIT ${Number(limit) || 50}`;
+                const r = await fetchSyncPost("/api/query/sql", {stmt});
+                return (r && (r.data as Array<Record<string, unknown>>)) || [];
+            },
+        };
     }],
     ["av", ({ctx, blockId}) => {
         ctx.av = {
