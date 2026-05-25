@@ -9,6 +9,7 @@
 // auto-cleaned timers — both will add to `ctx` WITHOUT changing this contract.
 
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
+import {adb} from "./adb";
 import {confirmDialog} from "../../dialog/confirmDialog";
 import {effectiveCaps, isKilled, hasGrant, addGrant, policySignature} from "./policy";
 import {getAllEditor} from "../../layout/getAll";
@@ -48,7 +49,7 @@ const lazyCommand = (o: {id: string; label: string; hotkey?: string; callback: (
     return () => { cancelled = true; if (off) { off(); } };
 };
 
-export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request";
+export type Capability = "compute" | "ui" | "persist" | "api" | "network" | "embed" | "libs" | "timers" | "watch" | "write" | "self" | "bind" | "channel" | "av" | "siyuan" | "cron" | "command" | "assets" | "storage" | "clipboard" | "worker" | "events" | "decorate" | "surfaces" | "export" | "request" | "adb";
 
 export interface SuperBlockCtx {
     blockId: string;
@@ -234,6 +235,10 @@ export interface SuperBlockCtx {
         // Escape hatch: run ANY kernel transaction (add rows/views, etc.). Gated by write.
         tx: (doOperations: Array<Record<string, unknown>>) => Promise<IWebSocketData>;
     };
+    // Advanced-database accessor (notes/20), present when the "adb" capability is
+    // granted: read/write a database's schema + rows + sidecar and render a UI element
+    // over it. Same object as window.siyuan.superblock.adb.
+    adb?: typeof adb;
     // present in FEATURE mode: the block's parsed, validated config (from
     // custom-sb-config merged over the feature's defaultConfig). Lets a feature's
     // run(ctx, config) be config-driven instead of hard-coded (notes/14, L2/L3).
@@ -252,7 +257,7 @@ export const PRESETS: Record<string, SuperBlockPreset> = {
     embed: {caps: ["compute", "ui", "embed"]},
     viz: {caps: ["compute", "ui", "libs"]},
     live: {caps: ["compute", "ui", "timers"]},
-    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate", "surfaces", "export", "request"]},
+    app: {caps: ["compute", "ui", "persist", "api", "network", "embed", "libs", "timers", "watch", "write", "self", "bind", "channel", "av", "siyuan", "cron", "command", "assets", "storage", "clipboard", "worker", "events", "decorate", "surfaces", "export", "request", "adb"]},
 };
 
 // Plugin-registered presets (notes/09 SPI step 2). Looked up after the built-ins,
@@ -1011,6 +1016,13 @@ export const CAP_PROVIDERS = new Map<string, CapProvider>([
                 fetchPost("/api/attr/setBlockAttrs", {id: blockId, attrs: {[key]: value}});
             },
         };
+    }],
+    // Advanced-database (notes/20): expose the adb accessor to super-block code so a
+    // block can read/manipulate an advanced database and render a UI element over it
+    // (one data source, no duplicate block). Declaring the "adb" capability is the
+    // consent; the accessor's own write ops go through the kernel.
+    ["adb", ({ctx}) => {
+        ctx.adb = adb;
     }],
     ["av", ({ctx, blockId}) => {
         ctx.av = {
