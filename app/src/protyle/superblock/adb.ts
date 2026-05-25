@@ -263,10 +263,21 @@ export const validate = (schema: AdbSchema): {ok: boolean; errors: string[]} => 
     return {ok: errors.length === 0, errors};
 };
 
+// Resolve a database BLOCK id → its AV id. renderAttributeView wants the av id; the
+// block stores it as `data-av-id` in its markdown. Falls back to the block id.
+const avIdOf = async (blockId: string): Promise<string> => {
+    try {
+        const q = await fetchSyncPost("/api/query/sql", {stmt: `SELECT markdown FROM blocks WHERE id='${blockId}' LIMIT 1`});
+        const md = (((q && q.data) || [])[0] || {}).markdown || "";
+        const m = md.match(/data-av-id="([^"]+)"/);
+        return m ? m[1] : blockId;
+    } catch (e) { return blockId; }
+};
+
 // Fetch the live columns of a database (best-effort across renderAttributeView shapes).
 const fetchColumns = async (blockId: string): Promise<Array<{id: string; name: string; type: string}>> => {
     try {
-        const r = await fetchSyncPost("/api/av/renderAttributeView", {id: blockId});
+        const r = await fetchSyncPost("/api/av/renderAttributeView", {id: await avIdOf(blockId), blockID: blockId, pageSize: 1, viewID: "", query: ""});
         const d = (r && r.data) || {};
         const view = d.view || {};
         const cols = view.columns || d.keyValues || [];
@@ -301,8 +312,9 @@ export const resolve = async (blockId: string): Promise<AdbResolved> => {
 // Returns {} if the row isn't found. Best-effort across renderAttributeView shapes.
 export const readRow = async (blockId: string, rowId: string): Promise<Record<string, unknown>> => {
     try {
-        const r = await fetchSyncPost("/api/av/renderAttributeView", {id: blockId});
-        const rows = (((r && r.data) || {}).view || {}).rows || [];
+        const r = await fetchSyncPost("/api/av/renderAttributeView", {id: await avIdOf(blockId), blockID: blockId, pageSize: 500, viewID: "", query: ""});
+        const view = ((r && r.data) || {}).view || {};
+        const rows = (view.rows || []).concat(...((view.groups || []).map((g: Record<string, unknown>) => (g.rows as unknown[]) || [])));
         const row = rows.find((rw: Record<string, unknown>) => String(rw.id) === String(rowId));
         if (!row) { return {}; }
         const out: Record<string, unknown> = {};

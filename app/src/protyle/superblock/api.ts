@@ -25,7 +25,7 @@ import {registerBlockDecorator, listBlockDecorators} from "./blockDecorators";
 import {getExportContent, listExports} from "./exportRegistry";
 import {adb} from "./adb";
 
-export const SUPERBLOCK_API_VERSION = "0.7.0";
+export const SUPERBLOCK_API_VERSION = "0.7.1";
 
 // Idempotent: registers window.siyuan.superblock once, at app init (before
 // plugins load), so plugins can use it in their onload.
